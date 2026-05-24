@@ -1,0 +1,59 @@
+.mini-app {
+  --background: 218 38% 8%;
+  --foreground: 210 28% 96%;
+  --card: 217 37% 13%;
+  --card-foreground: 210 28% 96%;
+  --primary: 172 74% 31%;
+  --primary-foreground: 173 40% 98%;
+  --secondary: 218 31% 18%;
+  --secondary-foreground: 212 28% 90%;
+  --muted: 218 30% 17%;
+  --muted-foreground: 215 18% 66%;
+  --accent: 174 68% 36%;
+  --accent-foreground: 0 0% 100%;
+  --border: 218 30% 22%;
+  --input: 218 30% 23%;
+  --ring: 172 74% 35%;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 50% -12%, rgba(22, 163, 142, 0.18), transparent 34%),
+    linear-gradient(180deg, #0b1220 0%, #09111d 48%, #070d17 100%);
+  color: hsl(var(--foreground));
+}
+
+.mini-app .mini-screen {
+  margin: 0 auto;
+  min-height: 100vh;
+  width: 100%;
+  max-width: 430px;
+  padding-bottom: 92px;
+}
+
+.mini-app .mini-card {
+  border-color: rgba(90, 116, 148, 0.34);
+  background: rgba(16, 31, 51, 0.92);
+  border-radius: 18px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+}
+
+.mini-app input,
+.mini-app textarea {
+  border-color: rgba(90, 116, 148, 0.42);
+  background: rgba(10, 20, 34, 0.88);
+  color: #f4f7fb;
+}
+
+.mini-app input::placeholder,
+.mini-app textarea::placeholder {
+  color: #8190a6;
+}
+
+.mini-app label {
+  color: #cbd5e1;
+}
+
+.mini-app .mini-nav {
+  border-color: rgba(90, 116, 148, 0.32);
+  background: rgba(9, 17, 30, 0.94);
+  backdrop-filter: blur(18px);
+}
