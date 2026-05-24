@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -55,10 +55,23 @@ class TelegramChat(Base, TimestampMixin):
     telegram_chat_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
     chat_type: Mapped[str] = mapped_column(String(32), index=True)
+    setup_status: Mapped[str] = mapped_column(String(32), default="pending_setup", index=True)
+    client_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    deal_direction: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    document_flow_type: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
     default_client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    default_manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    default_referral_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    default_referral_id: Mapped[int | None] = mapped_column(ForeignKey("referrals.id"), nullable=True)
+    rate_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active_draft_deal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     responsible_manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     connected_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class Client(Base, TimestampMixin):
@@ -66,6 +79,7 @@ class Client(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     full_name_ru: Mapped[str] = mapped_column(String(255), index=True)
+    client_type: Mapped[str] = mapped_column(String(64), default="physical_person", index=True)
     full_name_en: Mapped[str | None] = mapped_column(String(255), nullable=True)
     inn: Mapped[str | None] = mapped_column(String(32), nullable=True)
     citizenship: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -83,6 +97,12 @@ class Client(Base, TimestampMixin):
     responsible_manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     telegram_chat_id: Mapped[int | None] = mapped_column(ForeignKey("telegram_chats.id"), nullable=True)
     referral_id: Mapped[int | None] = mapped_column(ForeignKey("referrals.id"), nullable=True)
+    default_referral_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    default_referral_id: Mapped[int | None] = mapped_column(ForeignKey("referrals.id"), nullable=True)
+    default_referral_fee_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    default_referral_fee_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    default_referral_base: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    default_referral_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -125,6 +145,35 @@ class Contract(Base, TimestampMixin):
     client: Mapped[Client] = relationship(back_populates="contracts")
 
 
+class DocumentTemplate(Base, TimestampMixin):
+    __tablename__ = "document_templates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    slug: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    template_type: Mapped[str] = mapped_column(String(64), index=True)
+    document_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    direction: Mapped[str] = mapped_column(String(32), default="cfa", index=True)
+    client_type: Mapped[str] = mapped_column(String(64), default="physical_person", index=True)
+    document_flow_type: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
+    composition_type: Mapped[str] = mapped_column(String(32), default="single_document", index=True)
+    executor_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    version: Mapped[str] = mapped_column(String(32), default="1.0")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    original_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    file_mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    variables_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    missing_fields_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class CfaDeal(Base, TimestampMixin):
     __tablename__ = "cfa_deals"
 
@@ -138,6 +187,9 @@ class CfaDeal(Base, TimestampMixin):
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
     referral_id: Mapped[int | None] = mapped_column(ForeignKey("referrals.id"), nullable=True)
     source_type: Mapped[str] = mapped_column(String(32), default="manual_admin")
+    client_type: Mapped[str] = mapped_column(String(64), default="physical_person", index=True)
+    deal_direction: Mapped[str] = mapped_column(String(32), default="cfa", index=True)
+    document_flow_type: Mapped[str] = mapped_column(String(96), default="offer_join_statement", index=True)
     status: Mapped[str] = mapped_column(String(64), default="new_request", index=True)
     required_action: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
@@ -157,6 +209,10 @@ class CfaDeal(Base, TimestampMixin):
     referral_fee_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
     referral_fee_rub: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     referral_fee_usdt: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    referral_mode: Mapped[str] = mapped_column(String(32), default="inherit_from_client")
+    referral_base: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    referral_disabled_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    referral_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     actual_close_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
     actual_asset_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
@@ -205,3 +261,43 @@ class CfaDealStatusHistory(Base, TimestampMixin):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     deal: Mapped[CfaDeal] = relationship(back_populates="history")
+
+
+class DocumentIssueRequest(Base, TimestampMixin):
+    __tablename__ = "document_issue_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    deal_id: Mapped[int] = mapped_column(ForeignKey("cfa_deals.id"), index=True)
+    requested_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    requested_by_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    request_source: Mapped[str] = mapped_column(String(32), default="manager_admin", index=True)
+    request_type: Mapped[str] = mapped_column(String(64), default="contract", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="requested", index=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correction_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    issued_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    selected_template_id: Mapped[int | None] = mapped_column(ForeignKey("document_templates.id"), nullable=True)
+    generated_document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class GeneratedDocument(Base, TimestampMixin):
+    __tablename__ = "generated_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    deal_id: Mapped[int] = mapped_column(ForeignKey("cfa_deals.id"), index=True)
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("document_templates.id"), nullable=True)
+    issue_request_id: Mapped[int | None] = mapped_column(ForeignKey("document_issue_requests.id"), nullable=True)
+    document_type: Mapped[str] = mapped_column(String(64), index=True)
+    file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="generated", index=True)
+    generated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    issued_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    signed_uploaded_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

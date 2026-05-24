@@ -143,8 +143,18 @@ class TelegramChatBase(BaseModel):
     telegram_chat_id: str
     title: str
     chat_type: str
+    setup_status: str = "pending_setup"
+    client_type: str | None = None
+    deal_direction: str | None = None
+    document_flow_type: str | None = None
     default_client_id: int | None = None
     agent_id: int | None = None
+    default_manager_id: int | None = None
+    default_referral_mode: str | None = None
+    default_referral_id: int | None = None
+    rate_mode: str | None = None
+    notes: str | None = None
+    active_draft_deal_id: int | None = None
     responsible_manager_id: int | None = None
     connected_by: int | None = None
 
@@ -157,8 +167,18 @@ class TelegramChatUpdate(BaseModel):
     telegram_chat_id: str | None = None
     title: str | None = None
     chat_type: str | None = None
+    setup_status: str | None = None
+    client_type: str | None = None
+    deal_direction: str | None = None
+    document_flow_type: str | None = None
     default_client_id: int | None = None
     agent_id: int | None = None
+    default_manager_id: int | None = None
+    default_referral_mode: str | None = None
+    default_referral_id: int | None = None
+    rate_mode: str | None = None
+    notes: str | None = None
+    active_draft_deal_id: int | None = None
     responsible_manager_id: int | None = None
     connected_by: int | None = None
 
@@ -166,10 +186,23 @@ class TelegramChatUpdate(BaseModel):
 class TelegramChatOut(TelegramChatBase, OrmModel):
     id: int
     created_at: datetime
+    updated_at: datetime
+
+
+class TelegramChatSetup(BaseModel):
+    client_type: str
+    deal_direction: str
+    rate_mode: str = "skip"
+    referral_mode: str = "choose_later_in_admin"
+    chat_type: str = "client_group"
+    default_manager_id: int | None = None
+    default_referral_id: int | None = None
+    notes: str | None = None
 
 
 class ClientBase(BaseModel):
     full_name_ru: str
+    client_type: str = "physical_person"
     full_name_en: str | None = None
     inn: str | None = None
     citizenship: str | None = None
@@ -187,6 +220,12 @@ class ClientBase(BaseModel):
     responsible_manager_id: int | None = None
     telegram_chat_id: int | None = None
     referral_id: int | None = None
+    default_referral_enabled: bool = False
+    default_referral_id: int | None = None
+    default_referral_fee_type: str | None = None
+    default_referral_fee_value: Decimal | None = None
+    default_referral_base: str | None = None
+    default_referral_comment: str | None = None
 
 
 class ClientCreate(ClientBase):
@@ -195,6 +234,7 @@ class ClientCreate(ClientBase):
 
 class ClientUpdate(BaseModel):
     full_name_ru: str | None = None
+    client_type: str | None = None
     full_name_en: str | None = None
     inn: str | None = None
     citizenship: str | None = None
@@ -212,6 +252,12 @@ class ClientUpdate(BaseModel):
     responsible_manager_id: int | None = None
     telegram_chat_id: int | None = None
     referral_id: int | None = None
+    default_referral_enabled: bool | None = None
+    default_referral_id: int | None = None
+    default_referral_fee_type: str | None = None
+    default_referral_fee_value: Decimal | None = None
+    default_referral_base: str | None = None
+    default_referral_comment: str | None = None
 
 
 class ClientOut(ClientBase, OrmModel):
@@ -282,6 +328,68 @@ class ContractOut(ContractBase, OrmModel):
     created_at: datetime
 
 
+class DocumentTemplateBase(BaseModel):
+    name: str
+    slug: str
+    description: str | None = None
+    template_type: str
+    document_type: str | None = None
+    direction: str = "cfa"
+    client_type: str = "physical_person"
+    document_flow_type: str | None = None
+    composition_type: str = "single_document"
+    executor_id: int | None = None
+    version: str = "1.0"
+    is_active: bool = True
+    file_name: str | None = None
+    original_file_name: str | None = None
+    file_path: str | None = None
+    file_mime_type: str | None = None
+    file_size: int | None = None
+    variables_json: list[dict] | None = None
+    missing_fields_json: list[dict] | None = None
+    uploaded_by: int | None = None
+
+
+class DocumentTemplateCreate(DocumentTemplateBase):
+    pass
+
+
+class DocumentTemplateUpdate(BaseModel):
+    name: str | None = None
+    slug: str | None = None
+    description: str | None = None
+    template_type: str | None = None
+    document_type: str | None = None
+    direction: str | None = None
+    client_type: str | None = None
+    composition_type: str | None = None
+    executor_id: int | None = None
+    version: str | None = None
+    is_active: bool | None = None
+    variables_json: list[dict] | None = None
+    missing_fields_json: list[dict] | None = None
+
+
+class DocumentTemplateOut(DocumentTemplateBase, OrmModel):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class TemplateVariablesOut(BaseModel):
+    variables: list[str]
+
+
+class TemplateTestRenderRequest(BaseModel):
+    context: dict = {}
+
+
+class TemplateTestRenderOut(BaseModel):
+    generated_file_path: str
+    variables_used: list[str]
+
+
 class CfaDealBase(BaseModel):
     deal_number: str
     client_id: int
@@ -292,6 +400,9 @@ class CfaDealBase(BaseModel):
     agent_id: int | None = None
     referral_id: int | None = None
     source_type: str = "manual_admin"
+    client_type: str = "physical_person"
+    deal_direction: str = "cfa"
+    document_flow_type: str = "offer_join_statement"
     status: str = "new_request"
     required_action: str | None = None
     amount_rub: Decimal = 0
@@ -307,6 +418,10 @@ class CfaDealBase(BaseModel):
     referral_fee_value: Decimal | None = None
     referral_fee_rub: Decimal | None = None
     referral_fee_usdt: Decimal | None = None
+    referral_mode: str = "inherit_from_client"
+    referral_base: str | None = None
+    referral_disabled_reason: str | None = None
+    referral_comment: str | None = None
     actual_close_rate: Decimal | None = None
     actual_asset_amount: Decimal | None = None
     gross_profit_usdt: Decimal | None = None
@@ -330,6 +445,9 @@ class CfaDealUpdate(BaseModel):
     agent_id: int | None = None
     referral_id: int | None = None
     source_type: str | None = None
+    client_type: str | None = None
+    deal_direction: str | None = None
+    document_flow_type: str | None = None
     status: str | None = None
     required_action: str | None = None
     amount_rub: Decimal | None = None
@@ -345,6 +463,10 @@ class CfaDealUpdate(BaseModel):
     referral_fee_value: Decimal | None = None
     referral_fee_rub: Decimal | None = None
     referral_fee_usdt: Decimal | None = None
+    referral_mode: str | None = None
+    referral_base: str | None = None
+    referral_disabled_reason: str | None = None
+    referral_comment: str | None = None
     actual_close_rate: Decimal | None = None
     actual_asset_amount: Decimal | None = None
     client_payment_status: str | None = None
@@ -415,3 +537,56 @@ class CfaDealStatusHistoryOut(OrmModel):
     changed_by: int | None = None
     comment: str | None = None
     created_at: datetime
+
+
+class DocumentIssueRequestBase(BaseModel):
+    deal_id: int
+    requested_by_user_id: int | None = None
+    requested_by_role: str | None = None
+    request_source: str = "manager_admin"
+    request_type: str = "contract"
+    status: str = "requested"
+    comment: str | None = None
+    correction_comment: str | None = None
+    reviewed_by_user_id: int | None = None
+    issued_by_user_id: int | None = None
+    selected_template_id: int | None = None
+    generated_document_id: int | None = None
+
+
+class DocumentIssueRequestCreate(BaseModel):
+    request_source: str = "manager_admin"
+    request_type: str = "contract"
+    comment: str | None = None
+
+
+class DocumentIssueRequestUpdate(BaseModel):
+    status: str | None = None
+    comment: str | None = None
+    correction_comment: str | None = None
+    reviewed_by_user_id: int | None = None
+    issued_by_user_id: int | None = None
+    selected_template_id: int | None = None
+    generated_document_id: int | None = None
+
+
+class DocumentIssueRequestOut(DocumentIssueRequestBase, OrmModel):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class GeneratedDocumentOut(OrmModel):
+    id: int
+    deal_id: int
+    template_id: int | None = None
+    issue_request_id: int | None = None
+    document_type: str
+    file_name: str | None = None
+    file_path: str | None = None
+    status: str
+    generated_by_user_id: int | None = None
+    issued_by_user_id: int | None = None
+    signed_uploaded_by_user_id: int | None = None
+    created_at: datetime
+    updated_at: datetime
