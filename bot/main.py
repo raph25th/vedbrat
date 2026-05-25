@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import os
+from urllib.parse import urlencode
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatMemberStatus
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 from dotenv import load_dotenv
 
@@ -132,6 +133,17 @@ async def start(message: Message) -> None:
         text += "\n\nЗадайте HTTPS WEBAPP_URL через ngrok или production domain, чтобы открыть Mini App из Telegram."
 
     await message.answer(text, reply_markup=keyboard)
+
+
+@router.message(Command("new_document_request"))
+async def new_document_request(message: Message) -> None:
+    params = {"source": "bot"}
+    if message.from_user:
+        params["tg_id"] = str(message.from_user.id)
+        if message.from_user.username:
+            params["username"] = message.from_user.username
+    url = f"{WEBAPP_URL.rstrip('/')}/document-request?{urlencode(params)}"
+    await message.answer(f"Форма заявки на подготовку документов:\n{url}")
 
 
 @router.my_chat_member(F.chat.type.in_({"group", "supergroup"}))

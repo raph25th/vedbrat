@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, TypeVar
@@ -94,6 +94,18 @@ def get_or_404(db: Session, model: type[ModelT], obj_id: int) -> ModelT:
     return obj
 
 
+def prepare_client_values(values: dict[str, Any]) -> dict[str, Any]:
+    values["full_name_ru"] = values.get("full_name_ru") or values.get("ru_name") or "Unnamed client"
+    values["ru_name"] = values.get("ru_name") or values["full_name_ru"]
+    values["full_name_en"] = values.get("full_name_en") or values.get("en_name")
+    values["en_name"] = values.get("en_name") or values.get("full_name_en")
+    values["tax_residency"] = values.get("tax_residency") or values.get("tax_residency_country")
+    values["tax_residency_country"] = values.get("tax_residency_country") or values.get("tax_residency")
+    values["passport_number"] = values.get("passport_number") or values.get("passport_series_number")
+    values["passport_series_number"] = values.get("passport_series_number") or values.get("passport_number")
+    return values
+
+
 def calculate_profit_fields(deal: CfaDeal) -> None:
     if not deal.client_rate or not deal.actual_close_rate or not deal.amount_rub:
         return
@@ -131,6 +143,61 @@ def calculate_profit_fields(deal: CfaDeal) -> None:
     deal.referral_fee_rub = referral_fee_rub
     deal.net_profit_usdt = gross_profit_usdt - referral_fee_usdt
     deal.net_profit_rub = deal.gross_profit_rub - referral_fee_rub
+
+
+def prepare_document_request_values(values: dict[str, Any]) -> dict[str, Any]:
+    values["status"] = values.get("status") or "submitted"
+    values["request_source"] = values.get("request_source") or "mini_app"
+    values["request_type"] = values.get("request_type") or values.get("document_package_type") or "offer_crypto_individual"
+    values["client_type"] = values.get("client_type") or "individual"
+    values["deal_type"] = values.get("deal_type") or "crypto"
+    values["document_package_type"] = values.get("document_package_type") or "offer_crypto_individual"
+    values["currency"] = values.get("currency") or "RUB"
+    values["crypto_asset"] = values.get("crypto_asset") or "USDT"
+    values["agent_fee_percent"] = values.get("agent_fee_percent") if values.get("agent_fee_percent") is not None else Decimal("0.1")
+    values["offer_version"] = values.get("offer_version") or "1.002"
+    values["offer_date"] = values.get("offer_date") or date(2026, 5, 18)
+    full_amount = values.get("full_payment_amount") or values.get("total_amount")
+    values["full_payment_amount"] = full_amount
+    values["total_amount"] = values.get("total_amount") or full_amount
+    agent_fee_percent = values.get("agent_fee_percent")
+    if full_amount is not None and agent_fee_percent is not None:
+        total = Decimal(full_amount)
+        fee_percent = Decimal(agent_fee_percent)
+        supplier_payment_equal = (total / (Decimal(1) + fee_percent / Decimal(100))).quantize(Decimal("0.01"))
+        agent_fee_amount = (total - supplier_payment_equal).quantize(Decimal("0.01"))
+        values["supplier_payment_equal"] = values.get("supplier_payment_equal") or supplier_payment_equal
+        values["payment_amount"] = values.get("payment_amount") or supplier_payment_equal
+        values["agent_fee_amount"] = values.get("agent_fee_amount") or agent_fee_amount
+    return values
+
+
+def extract_client_values_from_request(values: dict[str, Any]) -> dict[str, Any]:
+    raw_payload = values.get("payload_json") or {}
+    return prepare_client_values(
+        {
+            "client_type": values.get("client_type") or raw_payload.get("client_type") or "individual",
+            "ru_name": raw_payload.get("ru_name"),
+            "en_name": raw_payload.get("en_name"),
+            "inn": raw_payload.get("inn"),
+            "phone": raw_payload.get("phone"),
+            "email": raw_payload.get("email"),
+            "telegram_id": raw_payload.get("telegram_id"),
+            "telegram_username": raw_payload.get("telegram_username"),
+            "birth_date": raw_payload.get("birth_date") or None,
+            "registration_address": raw_payload.get("registration_address"),
+            "passport_series_number": raw_payload.get("passport_series_number"),
+            "passport_issued_by": raw_payload.get("passport_issued_by"),
+            "passport_issue_date": raw_payload.get("passport_issue_date") or None,
+            "passport_department_code": raw_payload.get("passport_department_code"),
+            "bank_name": raw_payload.get("bank_name"),
+            "bank_account": raw_payload.get("bank_account"),
+            "bank_corr_account": raw_payload.get("bank_corr_account"),
+            "bank_bik": raw_payload.get("bank_bik"),
+            "bank_inn": raw_payload.get("bank_inn"),
+            "bank_kpp": raw_payload.get("bank_kpp"),
+        }
+    )
 
 
 @router.post("/auth/login", response_model=Token)
@@ -282,9 +349,9 @@ def setup_telegram_chat(chat_id: int, payload: TelegramChatSetup, db: Session = 
     return chat
 
 
-@router.post("/clients", response_model=ClientOut, dependencies=[Depends(require_roles("manager", "admin", "director"))])
+@router.post("/clients", response_model=ClientOut)
 def create_client(payload: ClientCreate, db: Session = Depends(get_db)) -> Client:
-    obj = Client(**payload.model_dump())
+    obj = Client(**prepare_client_values(payload.model_dump()))
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -292,16 +359,12 @@ def create_client(payload: ClientCreate, db: Session = Depends(get_db)) -> Clien
 
 
 @router.get("/clients", response_model=list[ClientOut])
-def list_clients(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> list[Client]:
-    if current_user.role == "client":
-        client = get_client_for_user(db, current_user)
-        return [client] if client else []
+def list_clients(db: Session = Depends(get_db)) -> list[Client]:
     return db.query(Client).order_by(Client.id.desc()).all()
 
 
 @router.get("/clients/{client_id}", response_model=ClientOut)
-def get_client(client_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> Client:
-    ensure_staff_or_owner(db, current_user, client_id)
+def get_client(client_id: int, db: Session = Depends(get_db)) -> Client:
     return get_or_404(db, Client, client_id)
 
 
@@ -819,6 +882,54 @@ def get_deal_history(
     if current_user.role == "client":
         return []
     return db.query(CfaDealStatusHistory).filter(CfaDealStatusHistory.deal_id == deal_id).order_by(CfaDealStatusHistory.id.desc()).all()
+
+
+@router.get("/document-requests", response_model=list[DocumentIssueRequestOut])
+def list_document_requests(db: Session = Depends(get_db)) -> list[DocumentIssueRequest]:
+    return db.query(DocumentIssueRequest).order_by(DocumentIssueRequest.id.desc()).all()
+
+
+@router.post("/document-requests", response_model=DocumentIssueRequestOut)
+def create_document_request(payload: DocumentIssueRequestCreate, db: Session = Depends(get_db)) -> DocumentIssueRequest:
+    values = prepare_document_request_values(payload.model_dump())
+    if not values.get("client_id"):
+        client_values = extract_client_values_from_request(values)
+        client = None
+        if client_values.get("inn"):
+            client = db.query(Client).filter(Client.inn == client_values["inn"]).first()
+        if client is None and client_values.get("phone"):
+            client = db.query(Client).filter(Client.phone == client_values["phone"]).first()
+        if client is None:
+            client = Client(**client_values)
+            db.add(client)
+            db.flush()
+        else:
+            for key, value in client_values.items():
+                if value and not getattr(client, key, None):
+                    setattr(client, key, value)
+        values["client_id"] = client.id
+    obj = DocumentIssueRequest(**values)
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+@router.get("/document-requests/{request_id}", response_model=DocumentIssueRequestOut)
+def get_document_request(request_id: int, db: Session = Depends(get_db)) -> DocumentIssueRequest:
+    return get_or_404(db, DocumentIssueRequest, request_id)
+
+
+@router.patch("/document-requests/{request_id}", response_model=DocumentIssueRequestOut)
+def update_document_request(
+    request_id: int,
+    payload: DocumentIssueRequestUpdate,
+    db: Session = Depends(get_db),
+) -> DocumentIssueRequest:
+    obj = apply_update(get_or_404(db, DocumentIssueRequest, request_id), payload)
+    db.commit()
+    db.refresh(obj)
+    return obj
 
 
 @router.get("/document-issue-requests", response_model=list[DocumentIssueRequestOut], dependencies=[Depends(require_roles("manager", "admin", "director", "document_admin", "admin_assistant"))])

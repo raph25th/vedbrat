@@ -1,75 +1,63 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
-import { ClientStatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tabs } from "@/components/ui/tabs";
-import { clients, deals } from "@/lib/sample-data";
-import { money } from "@/lib/utils";
+import { apiGet, type ClientRecord } from "@/lib/api";
 
-export default function ClientPage({ params }: { params: { id: string } }) {
-  const client = clients.find((item) => item.id === Number(params.id));
+const fields: Array<[string, keyof ClientRecord]> = [
+  ["Client type", "client_type"],
+  ["RU name", "ru_name"],
+  ["EN name", "en_name"],
+  ["INN", "inn"],
+  ["Phone", "phone"],
+  ["Email", "email"],
+  ["Telegram ID", "telegram_id"],
+  ["Telegram username", "telegram_username"],
+  ["Citizenship", "citizenship"],
+  ["Tax residency", "tax_residency_country"],
+  ["Birth date", "birth_date"],
+  ["Birth place", "birth_place"],
+  ["Passport type", "passport_type"],
+  ["Passport", "passport_series_number"],
+  ["Passport issue date", "passport_issue_date"],
+  ["Passport issued by", "passport_issued_by"],
+  ["Department code", "passport_department_code"],
+  ["Passport expires", "passport_expires_at"],
+  ["Registration address", "registration_address"],
+  ["Residential address", "residential_address"],
+  ["Bank", "bank_name"],
+  ["Bank account", "bank_account"],
+  ["Correspondent account", "bank_corr_account"],
+  ["BIK", "bank_bik"],
+  ["Bank INN", "bank_inn"],
+  ["Bank KPP", "bank_kpp"]
+];
+
+export default async function ClientPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const client = await apiGet<ClientRecord>(`/clients/${id}`);
   if (!client) notFound();
-  const clientDeals = deals.filter((deal) => deal.client_id === client.id);
 
   return (
     <>
-      <PageHeader title={client.full_name_ru} description={client.email} action={<ClientStatusBadge status={client.profile_status} />} />
+      <PageHeader
+        title={client.ru_name || client.full_name_ru || "Client"}
+        description="Real client record from CRM API."
+        action={
+          <Link href="/admin/clients">
+            <Button variant="outline">Back to clients</Button>
+          </Link>
+        }
+      />
       <div className="p-4 lg:p-8">
-        <Tabs
-          tabs={[
-            {
-              value: "profile",
-              label: "Профиль",
-              content: (
-                <Card>
-                  <CardHeader><CardTitle>Персональные данные</CardTitle></CardHeader>
-                  <CardContent className="grid gap-4 md:grid-cols-2">
-                    <div><Label>ФИО RU</Label><Input defaultValue={client.full_name_ru} /></div>
-                    <div><Label>ФИО EN</Label><Input defaultValue={client.full_name_en} /></div>
-                    <div><Label>ИНН</Label><Input defaultValue={client.inn} /></div>
-                    <div><Label>Телефон</Label><Input defaultValue={client.phone} /></div>
-                    <div className="md:col-span-2"><Button>Одобрить персональные данные</Button></div>
-                  </CardContent>
-                </Card>
-              )
-            },
-            {
-              value: "bank",
-              label: "Реквизиты",
-              content: (
-                <Card>
-                  <CardHeader><CardTitle>Банковские реквизиты</CardTitle></CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="rounded-md border p-4 text-sm">
-                      АО Банк, счет 40702...0001, назначение платежа согласовано
-                    </div>
-                    <Button>Одобрить реквизиты</Button>
-                  </CardContent>
-                </Card>
-              )
-            },
-            {
-              value: "deals",
-              label: "Сделки",
-              content: (
-                <Card>
-                  <CardHeader><CardTitle>Сделки клиента</CardTitle></CardHeader>
-                  <CardContent className="space-y-3">
-                    {clientDeals.map((deal) => (
-                      <div key={deal.id} className="flex items-center justify-between rounded-md border p-3 text-sm">
-                        <span>{deal.deal_number}</span>
-                        <span>{money(deal.amount_rub)}</span>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              )
-            }
-          ]}
-        />
+        <div className="grid gap-3 rounded-lg border bg-white p-4 md:grid-cols-2 xl:grid-cols-3">
+          {fields.map(([label, key]) => (
+            <div key={key} className="rounded-md border bg-muted/20 p-3 text-sm">
+              <div className="text-xs text-muted-foreground">{label}</div>
+              <div className="mt-1 font-medium text-slate-950">{String(client[key] || "Not provided")}</div>
+            </div>
+          ))}
+        </div>
       </div>
     </>
   );

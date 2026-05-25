@@ -56,40 +56,26 @@ export type MiniDocument = {
 };
 
 export const miniClient: MiniClientProfile = {
-  id: 1,
-  fullNameRu: "Иванов Алексей Сергеевич",
-  fullNameEn: "Alexey Ivanov",
-  inn: "770000000000",
-  citizenship: "Россия",
-  taxResidency: "Россия",
-  birthDate: "14.04.1989",
-  birthPlace: "Москва",
-  phone: "+7 999 111-22-33",
-  email: "client@example.com",
-  passportNumber: "4512 345678",
-  passportIssueDate: "20.05.2019",
-  passportIssuedBy: "ГУ МВД России по г. Москве",
-  passportDepartmentCode: "770-001",
-  registrationAddress: "г. Москва, ул. Примерная, д. 10, кв. 25",
-  profileStatus: "personal_data_approved",
-  bankDetailsStatus: "bank_details_approved"
+  id: 0,
+  fullNameRu: "",
+  fullNameEn: "",
+  inn: "",
+  citizenship: "",
+  taxResidency: "",
+  birthDate: "",
+  birthPlace: "",
+  phone: "",
+  email: "",
+  passportNumber: "",
+  passportIssueDate: "",
+  passportIssuedBy: "",
+  passportDepartmentCode: "",
+  registrationAddress: "",
+  profileStatus: "empty",
+  bankDetailsStatus: "empty"
 };
 
-export const miniBankAccounts: MiniBankAccount[] = [
-  {
-    id: 1,
-    recipientName: "Иванов Алексей Сергеевич",
-    bankName: "АО Тест Банк",
-    accountNumber: "40817810000000000001",
-    corrAccount: "30101810000000000225",
-    bic: "044525225",
-    bankInn: "7700000001",
-    bankKpp: "770001001",
-    paymentPurpose: "Оплата по договору поручения",
-    isDefault: true,
-    status: "bank_details_approved"
-  }
-];
+export const miniBankAccounts: MiniBankAccount[] = [];
 
 export const miniDeals: MiniDeal[] = [
   {

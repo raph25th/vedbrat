@@ -47,8 +47,8 @@ export default function NewCfaDealPage() {
                   <Input className="pl-9" placeholder="Найти по ФИО или ИНН" />
                 </div>
                 <div className="rounded-md border bg-muted/30 p-4 text-sm">
-                  <div className="font-medium">{selectedClient.fullNameRu}</div>
-                  <div className="mt-1 text-muted-foreground">ИНН {selectedClient.inn} · {selectedClient.email}</div>
+                  <div className="font-medium">{selectedClient?.fullNameRu || "No client selected"}</div>
+                  <div className="mt-1 text-muted-foreground">ИНН {selectedClient?.inn || ""} · {selectedClient?.email || ""}</div>
                 </div>
                 <Button variant="outline"><Plus className="h-4 w-4" />Создать нового клиента</Button>
               </CardContent>
@@ -58,7 +58,7 @@ export default function NewCfaDealPage() {
               <CardHeader><CardTitle>2. Реквизиты</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 <select className="h-10 w-full rounded-md border bg-white px-3 text-sm">
-                  <option>{selectedAccount.bankName} · {selectedAccount.accountNumber}</option>
+                  <option>{selectedAccount?.bankName || "No bank account selected"} · {selectedAccount?.accountNumber || ""}</option>
                 </select>
                 <Button variant="outline"><Plus className="h-4 w-4" />Добавить новые реквизиты</Button>
               </CardContent>
@@ -107,8 +107,8 @@ export default function NewCfaDealPage() {
           <Card>
             <CardHeader><CardTitle>5. Проверка</CardTitle></CardHeader>
             <CardContent className="space-y-4 text-sm">
-              <div className="rounded-md border bg-muted/30 p-3"><span className="text-muted-foreground">Клиент:</span> {selectedClient.fullNameRu}</div>
-              <div className="rounded-md border bg-muted/30 p-3"><span className="text-muted-foreground">Реквизиты:</span> {selectedAccount.bankName}</div>
+              <div className="rounded-md border bg-muted/30 p-3"><span className="text-muted-foreground">Клиент:</span> {selectedClient?.fullNameRu || "No client selected"}</div>
+              <div className="rounded-md border bg-muted/30 p-3"><span className="text-muted-foreground">Реквизиты:</span> {selectedAccount?.bankName || "No bank account selected"}</div>
               <div className="rounded-md border bg-muted/30 p-3"><span className="text-muted-foreground">Сумма:</span> {money(amountRub)}</div>
               <div className="rounded-md border bg-muted/30 p-3"><span className="text-muted-foreground">Курс:</span> {clientRate}</div>
               <div className="rounded-md border bg-muted/30 p-3"><span className="text-muted-foreground">USDT:</span> {assetAmount.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</div>

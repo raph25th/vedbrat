@@ -1,12 +1,13 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, FileText, HandCoins, MessageSquare, Users, UserCog, Network } from "lucide-react";
+import { BarChart3, ClipboardList, FileText, HandCoins, MessageSquare, Users, UserCog, Network } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const nav = [
   { href: "/admin/dashboard", label: "Дашборд", icon: BarChart3 },
+  { href: "/admin/document-requests", label: "Заявки на документы", icon: ClipboardList },
   { href: "/admin/cfa-deals", label: "ЦФА-сделки", icon: HandCoins },
   { href: "/admin/document-templates", label: "Шаблоны документов", icon: FileText },
   { href: "/admin/clients", label: "Клиенты", icon: Users },
