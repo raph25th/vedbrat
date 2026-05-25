@@ -46,6 +46,8 @@ def upgrade() -> None:
     add_column_if_missing("document_issue_requests", sa.Column("deal_type", sa.String(length=64), nullable=True))
     add_column_if_missing("document_issue_requests", sa.Column("payment_number", sa.String(length=128), nullable=True))
     add_column_if_missing("document_issue_requests", sa.Column("payment_date", sa.Date(), nullable=True))
+    add_column_if_missing("document_issue_requests", sa.Column("contract_number", sa.String(length=128), nullable=True))
+    add_column_if_missing("document_issue_requests", sa.Column("contract_date", sa.Date(), nullable=True))
     add_column_if_missing("document_issue_requests", sa.Column("offer_version", sa.String(length=32), nullable=True))
     add_column_if_missing("document_issue_requests", sa.Column("offer_date", sa.Date(), nullable=True))
     add_column_if_missing("document_issue_requests", sa.Column("total_amount", sa.Numeric(18, 2), nullable=True))
@@ -76,6 +78,22 @@ def upgrade() -> None:
     add_column_if_missing("document_issue_requests", sa.Column("manager_comment", sa.Text(), nullable=True))
     add_column_if_missing("document_issue_requests", sa.Column("admin_comment", sa.Text(), nullable=True))
     add_column_if_missing("document_issue_requests", sa.Column("payload_json", sa.JSON(), nullable=True))
+    add_column_if_missing("document_issue_requests", sa.Column("generated_documents_json", sa.JSON(), nullable=True))
+
+    add_column_if_missing("cfa_deals", sa.Column("document_request_id", sa.Integer(), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("asset", sa.String(length=32), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("full_payment_amount", sa.Numeric(18, 2), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("supplier_payment_equal", sa.Numeric(18, 2), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("agent_fee_amount", sa.Numeric(18, 2), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("agent_fee_percent", sa.Numeric(9, 6), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("currency", sa.String(length=16), nullable=False, server_default="RUB"))
+    add_column_if_missing("cfa_deals", sa.Column("contract_number", sa.String(length=128), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("contract_date", sa.Date(), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("payment_number", sa.String(length=128), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("payment_date", sa.Date(), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("generated_documents_json", sa.JSON(), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("payment_received_amount", sa.Numeric(18, 2), nullable=True))
+    add_column_if_missing("cfa_deals", sa.Column("payment_received_at", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:

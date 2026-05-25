@@ -5,9 +5,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { apiGet, apiPatch, type ClientRecord, type DocumentRequestRecord } from "@/lib/api";
+import { apiGet, apiPatch, apiUrl, type ClientRecord, type DocumentRequestRecord } from "@/lib/api";
 import { money } from "@/lib/utils";
 
 const statuses = ["submitted", "needs_review", "missing_data", "approved", "issued", "rejected", "cancelled"];
@@ -20,6 +21,12 @@ export default function DocumentRequestDetailPage() {
   const [status, setStatus] = useState("submitted");
   const [managerComment, setManagerComment] = useState("");
   const [adminComment, setAdminComment] = useState("");
+  const [contractNumber, setContractNumber] = useState("");
+  const [contractDate, setContractDate] = useState("");
+  const [paymentNumber, setPaymentNumber] = useState("");
+  const [paymentDate, setPaymentDate] = useState("");
+  const [generationError, setGenerationError] = useState("");
+  const [dealId, setDealId] = useState<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -29,6 +36,11 @@ export default function DocumentRequestDetailPage() {
       setStatus(record.status);
       setManagerComment(record.manager_comment || "");
       setAdminComment(record.admin_comment || "");
+      setContractNumber(record.contract_number || "");
+      setContractDate(record.contract_date || "");
+      setPaymentNumber(record.payment_number || "");
+      setPaymentDate(record.payment_date || "");
+      setDealId(record.deal_id || null);
       if (record.client_id) {
         const clientRecord = await apiGet<ClientRecord>(`/clients/${record.client_id}`);
         if (active) setClient(clientRecord);
@@ -47,6 +59,33 @@ export default function DocumentRequestDetailPage() {
       admin_comment: adminComment
     });
     if (updated) setRequest(updated);
+  }
+
+  async function saveIssueData() {
+    const updated = await apiPatch<DocumentRequestRecord>(`/document-requests/${params.id}`, {
+      contract_number: contractNumber,
+      contract_date: contractDate || null,
+      payment_number: paymentNumber,
+      payment_date: paymentDate || null
+    });
+    if (updated) setRequest(updated);
+  }
+
+  async function generateDocuments() {
+    setGenerationError("");
+    const response = await fetch(apiUrl(`/document-requests/${params.id}/generate-documents`), { method: "POST" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      setGenerationError(payload?.detail || "Не удалось сформировать документы. Проверьте обязательные поля заявки и данные выпуска.");
+      return;
+    }
+    const result = await response.json().catch(() => null);
+    if (result?.deal_id) setDealId(result.deal_id);
+    const updated = await apiGet<DocumentRequestRecord>(`/document-requests/${params.id}`);
+    if (updated) {
+      setRequest(updated);
+      setDealId(updated.deal_id || result?.deal_id || null);
+    }
   }
 
   if (!request) {
@@ -79,6 +118,17 @@ export default function DocumentRequestDetailPage() {
             <Field label="Тип сделки" value={request.deal_type || "crypto"} />
             <Field label="Пакет документов" value={request.document_package_type || "offer_crypto_individual"} />
           </Block>
+
+          <section className="rounded-lg border bg-white p-4">
+            <h2 className="text-base font-semibold text-slate-950">Данные для выпуска документов</h2>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <EditField label="Номер договора" value={contractNumber} onChange={setContractNumber} />
+              <EditField label="Дата договора" type="date" value={contractDate} onChange={setContractDate} />
+              <EditField label="Номер счет-поручения" value={paymentNumber} onChange={setPaymentNumber} />
+              <EditField label="Дата счет-поручения" type="date" value={paymentDate} onChange={setPaymentDate} />
+            </div>
+            <Button type="button" className="mt-4" onClick={saveIssueData}>Сохранить данные выпуска</Button>
+          </section>
 
           <Block title="2. Клиент">
             <Field label="ФИО" value={client?.ru_name || client?.full_name_ru || payloadValue(request, "ru_name")} />
@@ -119,13 +169,29 @@ export default function DocumentRequestDetailPage() {
           </Block>
 
           <section className="rounded-lg border bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-950">7. Документный пакет</h2>
+            <h2 className="text-base font-semibold text-slate-950">7. Документы</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Пакет: Оферта / крипта / физлицо</p>
             <div className="mt-3 grid gap-2">
               {packageTemplates.map((template) => (
                 <div key={template} className="rounded-md border bg-muted/20 p-3 text-sm">{template}</div>
               ))}
             </div>
-            <Button className="mt-4 w-full" disabled>Выпустить документы — скоро</Button>
+            <Button type="button" className="mt-4 w-full" onClick={generateDocuments}>Сформировать документы</Button>
+            {generationError ? <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{generationError}</div> : null}
+            {request.generated_documents_json ? (
+              <div className="mt-3 grid gap-2">
+                {Object.entries(request.generated_documents_json).map(([key, document]) => (
+                  <a key={key} href={apiUrl(document.download_url)} className="rounded-md border p-3 text-sm font-medium text-primary hover:bg-muted/40">
+                    Скачать: {document.title}
+                  </a>
+                ))}
+              </div>
+            ) : null}
+            {dealId ? (
+              <Link href={`/admin/deals/${dealId}`} className="mt-3 block rounded-md border p-3 text-center text-sm font-medium text-primary hover:bg-muted/40">
+                Открыть сделку
+              </Link>
+            ) : null}
           </section>
 
           <Block title="8. Комментарии">
@@ -172,6 +238,15 @@ function Field({ label, value, wide = false }: { label: string; value: unknown; 
     <div className={wide ? "rounded-md border bg-muted/20 p-3 text-sm md:col-span-2 xl:col-span-3" : "rounded-md border bg-muted/20 p-3 text-sm"}>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 break-words font-medium text-slate-950">{String(value || "Не указано")}</div>
+    </div>
+  );
+}
+
+function EditField({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
+  return (
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      <Input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }

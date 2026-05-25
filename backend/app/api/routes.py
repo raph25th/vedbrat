@@ -73,6 +73,7 @@ from app.schemas import (
     UserUpdate,
 )
 from app.services.document_flow import find_matching_document_templates, resolve_document_flow_type
+from app.services.document_request_generator import DOCUMENT_KEYS, DocumentGenerationError, generate_request_documents
 from app.services.document_templates import DocumentTemplateService
 
 router = APIRouter()
@@ -172,6 +173,11 @@ def prepare_document_request_values(values: dict[str, Any]) -> dict[str, Any]:
     return values
 
 
+def payload_value(request: DocumentIssueRequest, key: str) -> Any:
+    payload = request.payload_json or {}
+    return payload.get(key)
+
+
 def extract_client_values_from_request(values: dict[str, Any]) -> dict[str, Any]:
     raw_payload = values.get("payload_json") or {}
     return prepare_client_values(
@@ -198,6 +204,51 @@ def extract_client_values_from_request(values: dict[str, Any]) -> dict[str, Any]
             "bank_kpp": raw_payload.get("bank_kpp"),
         }
     )
+
+
+def sync_deal_from_document_request(
+    db: Session,
+    request: DocumentIssueRequest,
+    client: Client,
+    documents: dict[str, Any],
+) -> CfaDeal:
+    deal = None
+    if request.deal_id:
+        deal = db.get(CfaDeal, request.deal_id)
+    if deal is None:
+        deal = db.query(CfaDeal).filter(CfaDeal.document_request_id == request.id).first()
+    if deal is None:
+        deal = CfaDeal(
+            deal_number=f"DOCREQ-{request.id}",
+            client_id=client.id,
+            document_request_id=request.id,
+        )
+        db.add(deal)
+
+    deal.client_id = client.id
+    deal.document_request_id = request.id
+    deal.deal_direction = request.deal_type or "crypto"
+    deal.client_type = request.client_type or "individual"
+    deal.asset = request.crypto_asset or "USDT"
+    deal.status = "documents_generated"
+    deal.source_type = "document_request"
+    deal.document_flow_type = request.document_package_type or "offer_crypto_individual"
+    deal.contract_number = request.contract_number
+    deal.contract_date = request.contract_date
+    deal.payment_number = request.payment_number
+    deal.payment_date = request.payment_date
+    deal.full_payment_amount = request.full_payment_amount
+    deal.amount_rub = request.full_payment_amount or 0
+    deal.supplier_payment_equal = request.supplier_payment_equal
+    deal.agent_fee_amount = request.agent_fee_amount
+    deal.agent_fee_percent = request.agent_fee_percent
+    deal.currency = request.currency or "RUB"
+    deal.wallet_address = request.wallet_address or payload_value(request, "wallet_address")
+    deal.generated_documents_json = documents
+    deal.required_action = "Ожидаем оплату"
+    db.flush()
+    request.deal_id = deal.id
+    return deal
 
 
 @router.post("/auth/login", response_model=Token)
@@ -884,6 +935,32 @@ def get_deal_history(
     return db.query(CfaDealStatusHistory).filter(CfaDealStatusHistory.deal_id == deal_id).order_by(CfaDealStatusHistory.id.desc()).all()
 
 
+@router.get("/deals", response_model=list[CfaDealOut])
+def list_active_deals(db: Session = Depends(get_db)) -> list[CfaDeal]:
+    return db.query(CfaDeal).order_by(CfaDeal.id.desc()).all()
+
+
+@router.get("/deals/{deal_id}", response_model=CfaDealOut)
+def get_active_deal(deal_id: int, db: Session = Depends(get_db)) -> CfaDeal:
+    return get_or_404(db, CfaDeal, deal_id)
+
+
+@router.patch("/deals/{deal_id}", response_model=CfaDealOut)
+def update_active_deal(deal_id: int, payload: CfaDealUpdate, db: Session = Depends(get_db)) -> CfaDeal:
+    deal = get_or_404(db, CfaDeal, deal_id)
+    allowed = {"status", "payment_received_amount", "payment_received_at", "comment"}
+    values = {key: value for key, value in payload.model_dump(exclude_unset=True).items() if key in allowed}
+    for key, value in values.items():
+        setattr(deal, key, value)
+    if values.get("payment_received_amount") is not None:
+        deal.client_payment_amount_rub = values["payment_received_amount"]
+    if values.get("payment_received_at") is not None:
+        deal.client_payment_received_at = values["payment_received_at"]
+    db.commit()
+    db.refresh(deal)
+    return deal
+
+
 @router.get("/document-requests", response_model=list[DocumentIssueRequestOut])
 def list_document_requests(db: Session = Depends(get_db)) -> list[DocumentIssueRequest]:
     return db.query(DocumentIssueRequest).order_by(DocumentIssueRequest.id.desc()).all()
@@ -930,6 +1007,43 @@ def update_document_request(
     db.commit()
     db.refresh(obj)
     return obj
+
+
+@router.post("/document-requests/{request_id}/generate-documents")
+def generate_document_request_documents(request_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    obj = get_or_404(db, DocumentIssueRequest, request_id)
+    if not obj.client_id:
+        raise HTTPException(status_code=400, detail="К заявке не привязан клиент")
+    client = get_or_404(db, Client, obj.client_id)
+    try:
+        documents = generate_request_documents(obj, client)
+    except DocumentGenerationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    obj.generated_documents_json = documents
+    deal = sync_deal_from_document_request(db, obj, client, documents)
+    db.commit()
+    db.refresh(obj)
+    db.refresh(deal)
+    return {"documents": documents, "deal_id": deal.id}
+
+
+@router.get("/document-requests/{request_id}/documents/{document_key}/download")
+def download_document_request_document(
+    request_id: int,
+    document_key: str,
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    obj = get_or_404(db, DocumentIssueRequest, request_id)
+    if document_key not in DOCUMENT_KEYS:
+        raise HTTPException(status_code=404, detail="Document key not found")
+    documents = obj.generated_documents_json or {}
+    document = documents.get(document_key)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document has not been generated")
+    file_path = Path(document["file_path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Generated file not found")
+    return FileResponse(file_path, filename=document["file_name"])
 
 
 @router.get("/document-issue-requests", response_model=list[DocumentIssueRequestOut], dependencies=[Depends(require_roles("manager", "admin", "director", "document_admin", "admin_assistant"))])

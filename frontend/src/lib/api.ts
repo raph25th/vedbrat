@@ -1,5 +1,9 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
+export function apiUrl(path: string): string {
+  return `${API_URL}${path}`;
+}
+
 export type ClientRecord = {
   id: number;
   client_type: string;
@@ -38,12 +42,15 @@ export type DocumentRequestRecord = {
   id: number;
   status: string;
   request_source: string;
+  deal_id: number | null;
   client_id: number | null;
   client_type: string | null;
   document_package_type: string | null;
   deal_type: string | null;
   payment_number: string | null;
   payment_date: string | null;
+  contract_number: string | null;
+  contract_date: string | null;
   offer_version: string | null;
   offer_date: string | null;
   total_amount: string | number | null;
@@ -74,6 +81,34 @@ export type DocumentRequestRecord = {
   manager_comment: string | null;
   admin_comment: string | null;
   payload_json: Record<string, unknown> | null;
+  generated_documents_json: Record<string, { title: string; file_name: string; download_url: string }> | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DealRecord = {
+  id: number;
+  deal_number: string;
+  client_id: number;
+  document_request_id: number | null;
+  deal_direction: string;
+  client_type: string;
+  asset: string | null;
+  status: string;
+  contract_number: string | null;
+  contract_date: string | null;
+  payment_number: string | null;
+  payment_date: string | null;
+  full_payment_amount: string | number | null;
+  supplier_payment_equal: string | number | null;
+  agent_fee_amount: string | number | null;
+  agent_fee_percent: string | number | null;
+  currency: string;
+  wallet_address: string | null;
+  generated_documents_json: Record<string, { title: string; file_name: string; download_url: string }> | null;
+  payment_received_amount: string | number | null;
+  payment_received_at: string | null;
+  comment: string | null;
   created_at: string;
   updated_at: string;
 };

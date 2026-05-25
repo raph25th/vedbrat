@@ -423,6 +423,7 @@ class TemplateTestRenderOut(BaseModel):
 class CfaDealBase(BaseModel):
     deal_number: str
     client_id: int
+    document_request_id: int | None = None
     contract_id: int | None = None
     bank_account_id: int | None = None
     manager_id: int | None = None
@@ -432,10 +433,21 @@ class CfaDealBase(BaseModel):
     source_type: str = "manual_admin"
     client_type: str = "physical_person"
     deal_direction: str = "cfa"
+    asset: str | None = None
     document_flow_type: str = "offer_join_statement"
     status: str = "new_request"
     required_action: str | None = None
     amount_rub: Decimal = 0
+    full_payment_amount: Decimal | None = None
+    supplier_payment_equal: Decimal | None = None
+    agent_fee_amount: Decimal | None = None
+    agent_fee_percent: Decimal | None = None
+    currency: str = "RUB"
+    contract_number: str | None = None
+    contract_date: date | None = None
+    payment_number: str | None = None
+    payment_date: date | None = None
+    generated_documents_json: dict | None = None
     rate_mode: str = "manual_fixed"
     cb_rate_date: date | None = None
     cb_rate_value: Decimal | None = None
@@ -460,6 +472,8 @@ class CfaDealBase(BaseModel):
     net_profit_rub: Decimal | None = None
     client_payment_status: str = "not_received"
     client_payment_amount_rub: Decimal | None = None
+    payment_received_amount: Decimal | None = None
+    payment_received_at: datetime | None = None
     comment: str | None = None
 
 
@@ -468,6 +482,7 @@ class CfaDealCreate(CfaDealBase):
 
 
 class CfaDealUpdate(BaseModel):
+    document_request_id: int | None = None
     contract_id: int | None = None
     bank_account_id: int | None = None
     manager_id: int | None = None
@@ -477,10 +492,21 @@ class CfaDealUpdate(BaseModel):
     source_type: str | None = None
     client_type: str | None = None
     deal_direction: str | None = None
+    asset: str | None = None
     document_flow_type: str | None = None
     status: str | None = None
     required_action: str | None = None
     amount_rub: Decimal | None = None
+    full_payment_amount: Decimal | None = None
+    supplier_payment_equal: Decimal | None = None
+    agent_fee_amount: Decimal | None = None
+    agent_fee_percent: Decimal | None = None
+    currency: str | None = None
+    contract_number: str | None = None
+    contract_date: date | None = None
+    payment_number: str | None = None
+    payment_date: date | None = None
+    generated_documents_json: dict | None = None
     rate_mode: str | None = None
     cb_rate_date: date | None = None
     cb_rate_value: Decimal | None = None
@@ -501,6 +527,8 @@ class CfaDealUpdate(BaseModel):
     actual_asset_amount: Decimal | None = None
     client_payment_status: str | None = None
     client_payment_amount_rub: Decimal | None = None
+    payment_received_amount: Decimal | None = None
+    payment_received_at: datetime | None = None
     comment: str | None = None
 
 
@@ -577,6 +605,8 @@ class DocumentIssueRequestBase(BaseModel):
     deal_type: str | None = None
     payment_number: str | None = None
     payment_date: date | None = None
+    contract_number: str | None = None
+    contract_date: date | None = None
     offer_version: str | None = None
     offer_date: date | None = None
     total_amount: Decimal | None = None
@@ -607,6 +637,7 @@ class DocumentIssueRequestBase(BaseModel):
     manager_comment: str | None = None
     admin_comment: str | None = None
     payload_json: dict | None = None
+    generated_documents_json: dict | None = None
     requested_by_user_id: int | None = None
     requested_by_role: str | None = None
     request_source: str = "manager_admin"
@@ -627,6 +658,8 @@ class DocumentIssueRequestCreate(BaseModel):
     deal_type: str | None = None
     payment_number: str | None = None
     payment_date: date | None = None
+    contract_number: str | None = None
+    contract_date: date | None = None
     offer_version: str | None = None
     offer_date: date | None = None
     total_amount: Decimal | None = None
@@ -657,6 +690,7 @@ class DocumentIssueRequestCreate(BaseModel):
     manager_comment: str | None = None
     admin_comment: str | None = None
     payload_json: dict | None = None
+    generated_documents_json: dict | None = None
     request_source: str = "manager_admin"
     request_type: str = "contract"
     status: str = "submitted"
@@ -670,6 +704,8 @@ class DocumentIssueRequestUpdate(BaseModel):
     deal_type: str | None = None
     payment_number: str | None = None
     payment_date: date | None = None
+    contract_number: str | None = None
+    contract_date: date | None = None
     offer_version: str | None = None
     offer_date: date | None = None
     total_amount: Decimal | None = None
@@ -700,6 +736,7 @@ class DocumentIssueRequestUpdate(BaseModel):
     manager_comment: str | None = None
     admin_comment: str | None = None
     payload_json: dict | None = None
+    generated_documents_json: dict | None = None
     status: str | None = None
     comment: str | None = None
     correction_comment: str | None = None

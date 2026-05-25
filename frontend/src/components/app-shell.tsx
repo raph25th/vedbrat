@@ -2,14 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileText, HandCoins, Home, User } from "lucide-react";
+import { FileText, Home } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const nav = [
   { href: "/app", label: "Главная", icon: Home },
-  { href: "/app/deals", label: "Сделки", icon: HandCoins },
-  { href: "/app/documents", label: "Документы", icon: FileText },
-  { href: "/app/profile", label: "Профиль", icon: User }
+  { href: "/app/document-request", label: "Заявка", icon: FileText }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -19,7 +17,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="mini-app">
       <div className="mini-screen">
         {children}
-        <nav className="mini-nav fixed inset-x-0 bottom-0 z-30 mx-auto grid h-[72px] max-w-[430px] grid-cols-4 border-t px-2 pb-2 pt-1">
+        <nav className="mini-nav fixed inset-x-0 bottom-0 z-30 mx-auto grid h-[72px] max-w-[430px] grid-cols-2 border-t px-2 pb-2 pt-1">
           {nav.map((item) => {
             const Icon = item.icon;
             const active = item.href === "/app" ? pathname === "/app" : pathname.startsWith(item.href);

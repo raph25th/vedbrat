@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Suspense, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,47 @@ const initialForm = {
   telegram_username: ""
 };
 
+type TelegramContext = {
+  telegram_id: string;
+  telegram_username: string;
+  telegram_first_name: string;
+  telegram_last_name: string;
+  telegram_language_code: string;
+  telegram_chat_id: string;
+  telegram_chat_type: string;
+  telegram_chat_title: string;
+  telegram_start_param: string;
+  telegram_init_data: string;
+};
+
+type TelegramWebApp = {
+  ready?: () => void;
+  initData?: string;
+  initDataUnsafe?: {
+    start_param?: string;
+    user?: {
+      id?: number;
+      username?: string;
+      first_name?: string;
+      last_name?: string;
+      language_code?: string;
+    };
+    chat?: {
+      id?: number | string;
+      type?: string;
+      title?: string;
+    };
+  };
+};
+
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: TelegramWebApp;
+    };
+  }
+}
+
 export default function DocumentRequestPage() {
   return (
     <Suspense fallback={<main className="px-4 py-5 text-sm text-slate-400">Загрузка...</main>}>
@@ -46,13 +87,46 @@ export default function DocumentRequestPage() {
 
 function DocumentRequestForm() {
   const searchParams = useSearchParams();
+  const queryTelegramContext = useMemo(() => getTelegramContextFromQuery(searchParams), [searchParams]);
   const [form, setForm] = useState({
     ...initialForm,
-    telegram_id: searchParams.get("tg_id") || "",
-    telegram_username: searchParams.get("username") || ""
+    telegram_id: queryTelegramContext.telegram_id,
+    telegram_username: queryTelegramContext.telegram_username
   });
+  const [telegramContext, setTelegramContext] = useState<TelegramContext>(queryTelegramContext);
   const [submittedId, setSubmittedId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const webApp = window.Telegram?.WebApp;
+    webApp?.ready?.();
+    const timer = window.setTimeout(() => {
+      const initData = webApp?.initDataUnsafe;
+      const user = initData?.user;
+      const chat = initData?.chat;
+      const nextContext: TelegramContext = {
+        ...queryTelegramContext,
+        telegram_id: user?.id ? String(user.id) : queryTelegramContext.telegram_id,
+        telegram_username: normalizeUsername(user?.username || queryTelegramContext.telegram_username),
+        telegram_first_name: user?.first_name || queryTelegramContext.telegram_first_name,
+        telegram_last_name: user?.last_name || queryTelegramContext.telegram_last_name,
+        telegram_language_code: user?.language_code || queryTelegramContext.telegram_language_code,
+        telegram_chat_id: chat?.id ? String(chat.id) : queryTelegramContext.telegram_chat_id,
+        telegram_chat_type: chat?.type || queryTelegramContext.telegram_chat_type,
+        telegram_chat_title: chat?.title || queryTelegramContext.telegram_chat_title,
+        telegram_start_param: initData?.start_param || queryTelegramContext.telegram_start_param,
+        telegram_init_data: webApp?.initData || queryTelegramContext.telegram_init_data
+      };
+      setTelegramContext(nextContext);
+      setForm((current) => ({
+        ...current,
+        telegram_id: nextContext.telegram_id || current.telegram_id,
+        telegram_username: nextContext.telegram_username || current.telegram_username
+      }));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [queryTelegramContext]);
 
   const totals = useMemo(() => {
     const total = Number(form.full_payment_amount || 0);
@@ -75,8 +149,15 @@ function DocumentRequestForm() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
+    setSubmitError(null);
     const source = searchParams.get("source");
-    const requestSource = source === "bot" ? "bot" : source || "mini_app";
+    const requestSource =
+      source === "bot" ? "bot" : telegramContext.telegram_id || telegramContext.telegram_init_data ? "telegram_mini_app" : source || "mini_app";
+    const telegramPayload = {
+      ...telegramContext,
+      telegram_id: telegramContext.telegram_id || form.telegram_id,
+      telegram_username: telegramContext.telegram_username || form.telegram_username
+    };
     const payload = {
       status: "submitted",
       request_source: requestSource,
@@ -95,6 +176,8 @@ function DocumentRequestForm() {
       client_comment: form.client_comment,
       payload_json: {
         ...form,
+        ...telegramPayload,
+        telegram: telegramPayload,
         client_type: "individual",
         deal_type: "crypto",
         document_package_type: "offer_crypto_individual",
@@ -109,6 +192,8 @@ function DocumentRequestForm() {
     setSubmitting(false);
     if (created) {
       setSubmittedId(created.id);
+    } else {
+      setSubmitError("Не удалось отправить заявку. Проверьте соединение и попробуйте еще раз.");
     }
   }
 
@@ -129,6 +214,11 @@ function DocumentRequestForm() {
         <h1 className="text-2xl font-semibold text-slate-50">Заявка на подготовку документов</h1>
         <p className="text-sm text-slate-400">Физическое лицо / крипта / USDT / оферта.</p>
       </header>
+      {telegramContext.telegram_id ? (
+        <section className="mini-card rounded-xl border border-slate-700/60 bg-slate-900/70 p-4 text-sm text-slate-300">
+          Заявка будет связана с Telegram {telegramContext.telegram_username ? `@${telegramContext.telegram_username}` : `ID ${telegramContext.telegram_id}`}.
+        </section>
+      ) : null}
       <form onSubmit={submit} className="space-y-4">
         <Section title="1. Данные клиента">
           <Field label="ФИО" value={form.ru_name} onChange={(value) => update("ru_name", value)} required />
@@ -170,9 +260,29 @@ function DocumentRequestForm() {
           <Send className="h-4 w-4" />
           {submitting ? "Отправляем..." : "Отправить заявку"}
         </Button>
+        {submitError ? <div className="text-sm text-red-300">{submitError}</div> : null}
       </form>
     </main>
   );
+}
+
+function getTelegramContextFromQuery(searchParams: { get: (name: string) => string | null }): TelegramContext {
+  return {
+    telegram_id: searchParams.get("tg_id") || searchParams.get("telegram_id") || searchParams.get("user_id") || "",
+    telegram_username: normalizeUsername(searchParams.get("username") || searchParams.get("telegram_username") || ""),
+    telegram_first_name: searchParams.get("first_name") || "",
+    telegram_last_name: searchParams.get("last_name") || "",
+    telegram_language_code: searchParams.get("language_code") || "",
+    telegram_chat_id: searchParams.get("chat_id") || "",
+    telegram_chat_type: searchParams.get("chat_type") || "",
+    telegram_chat_title: searchParams.get("chat_title") || "",
+    telegram_start_param: searchParams.get("start_param") || searchParams.get("startapp") || "",
+    telegram_init_data: ""
+  };
+}
+
+function normalizeUsername(username: string | null | undefined): string {
+  return (username || "").replace(/^@/, "");
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
