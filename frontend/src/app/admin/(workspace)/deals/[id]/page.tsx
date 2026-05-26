@@ -116,8 +116,8 @@ export default function DealDetailPage() {
           <Block title="Клиент">
             <Field label="ФИО" value={client?.ru_name || client?.full_name_ru || deal.client_name} />
             <Field label="ИНН" value={client?.inn || deal.client_inn} />
-            <Field label="Телефон" value={client?.phone} />
-            <Field label="Email" value={client?.email || "-"} />
+            <Field label="Телефон" value={client?.phone || deal.client_phone} />
+            <Field label="Email" value={client?.email || deal.client_email || "-"} />
             <Field label="Менеджер" value={deal.manager_name || (deal.manager_id ? `#${deal.manager_id}` : null)} />
           </Block>
 

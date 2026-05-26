@@ -536,6 +536,8 @@ class CfaDealOut(CfaDealBase, OrmModel):
     id: int
     client_name: str | None = None
     client_inn: str | None = None
+    client_phone: str | None = None
+    client_email: str | None = None
     manager_name: str | None = None
     referral_name: str | None = None
     documents_status: str | None = None

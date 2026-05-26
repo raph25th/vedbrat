@@ -278,6 +278,14 @@ class CfaDeal(Base, TimestampMixin):
         return self.client.inn if self.client else None
 
     @property
+    def client_phone(self) -> str | None:
+        return self.client.phone if self.client else None
+
+    @property
+    def client_email(self) -> str | None:
+        return self.client.email if self.client else None
+
+    @property
     def manager_name(self) -> str | None:
         return self.manager.name if self.manager else None
 

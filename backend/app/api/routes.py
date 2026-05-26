@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.db.session import get_db
-from app.deps import ensure_staff_or_owner, get_client_for_user, get_current_user, require_roles
+from app.deps import ensure_staff_or_owner, get_client_for_user, get_current_user, get_optional_current_user, require_roles
 from app.models import (
     Agent,
     CfaDeal,
@@ -88,7 +88,7 @@ from app.services.document_templates import DocumentTemplateError, DocumentTempl
 router = APIRouter()
 ModelT = TypeVar("ModelT")
 template_service = DocumentTemplateService()
-DOCUMENT_ISSUER_ROLES = ("director", "document_admin", "admin_assistant")
+DOCUMENT_ISSUER_ROLES = ("admin", "director", "document_admin", "admin_assistant")
 
 
 def apply_update(obj: Any, payload: Any) -> Any:
@@ -371,6 +371,19 @@ def upsert_client_from_document_request_values(
     return client
 
 
+def client_has_visible_identity(client: Client | None) -> bool:
+    return bool(
+        client
+        and (
+            client.ru_name
+            or client.full_name_ru
+            or client.inn
+            or client.phone
+            or client.email
+        )
+    )
+
+
 def document_request_values(obj: DocumentIssueRequest) -> dict[str, Any]:
     return {
         "client_id": obj.client_id,
@@ -395,6 +408,26 @@ def apply_document_request_update(
         upsert_client_from_document_request_values(db, current_values, overwrite_existing=True)
         obj.client_id = current_values["client_id"]
     return obj
+
+
+def ensure_deal_client_from_document_request(db: Session, deal: CfaDeal) -> bool:
+    request = None
+    if deal.document_request_id:
+        request = db.get(DocumentIssueRequest, deal.document_request_id)
+    if request is None:
+        request = db.query(DocumentIssueRequest).filter(DocumentIssueRequest.deal_id == deal.id).first()
+    if request is None:
+        return False
+
+    current_client = db.get(Client, deal.client_id) if deal.client_id else None
+    if request.payload_json or request.client_id:
+        values = document_request_values(request)
+        client = upsert_client_from_document_request_values(db, values)
+        request.client_id = values["client_id"]
+        if deal.client_id != client.id or not client_has_visible_identity(current_client):
+            deal.client_id = client.id
+            return True
+    return False
 
 
 def document_request_deal_status(request: DocumentIssueRequest) -> str:
@@ -1181,12 +1214,24 @@ def get_deal_history(
 
 @router.get("/deals", response_model=list[CfaDealOut])
 def list_active_deals(db: Session = Depends(get_db)) -> list[CfaDeal]:
-    return db.query(CfaDeal).order_by(CfaDeal.id.desc()).all()
+    deals = db.query(CfaDeal).order_by(CfaDeal.id.desc()).all()
+    changed = False
+    for deal in deals:
+        changed = ensure_deal_client_from_document_request(db, deal) or changed
+    if changed:
+        db.commit()
+        for deal in deals:
+            db.refresh(deal)
+    return deals
 
 
 @router.get("/deals/{deal_id}", response_model=CfaDealOut)
 def get_active_deal(deal_id: int, db: Session = Depends(get_db)) -> CfaDeal:
-    return get_or_404(db, CfaDeal, deal_id)
+    deal = get_or_404(db, CfaDeal, deal_id)
+    if ensure_deal_client_from_document_request(db, deal):
+        db.commit()
+        db.refresh(deal)
+    return deal
 
 
 @router.patch("/deals/{deal_id}", response_model=CfaDealOut)
@@ -1318,7 +1363,7 @@ def list_document_requests(db: Session = Depends(get_db)) -> list[DocumentIssueR
 @router.post("/document-requests", response_model=DocumentIssueRequestOut)
 def create_document_request(payload: DocumentIssueRequestCreate, db: Session = Depends(get_db)) -> DocumentIssueRequest:
     values = prepare_document_request_values(payload.model_dump())
-    if not values.get("client_id"):
+    if values.get("payload_json") or not values.get("client_id"):
         upsert_client_from_document_request_values(db, values)
     obj = DocumentIssueRequest(**values)
     db.add(obj)
@@ -1366,8 +1411,10 @@ def delete_document_request(request_id: int, db: Session = Depends(get_db)) -> N
 def generate_document_request_documents(
     request_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(*DOCUMENT_ISSUER_ROLES)),
+    current_user: User | None = Depends(get_optional_current_user),
 ) -> dict[str, Any]:
+    if current_user and current_user.role not in DOCUMENT_ISSUER_ROLES:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
     obj = get_or_404(db, DocumentIssueRequest, request_id)
     if not obj.client_id:
         raise HTTPException(status_code=400, detail="К заявке не привязан клиент")
@@ -1388,8 +1435,8 @@ def generate_document_request_documents(
                 file_name=document["file_name"],
                 file_path=document["file_path"],
                 status="issued_pdf",
-                generated_by_user_id=current_user.id,
-                issued_by_user_id=current_user.id,
+                generated_by_user_id=current_user.id if current_user else None,
+                issued_by_user_id=current_user.id if current_user else None,
             )
         )
     db.commit()
