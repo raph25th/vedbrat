@@ -44,6 +44,10 @@ export type DocumentRequestRecord = {
   request_source: string;
   deal_id: number | null;
   client_id: number | null;
+  client_name: string | null;
+  client_inn: string | null;
+  manager_id: number | null;
+  manager_name: string | null;
   client_type: string | null;
   document_package_type: string | null;
   deal_type: string | null;
@@ -90,7 +94,13 @@ export type DealRecord = {
   id: number;
   deal_number: string;
   client_id: number;
+  client_name: string | null;
+  client_inn: string | null;
   document_request_id: number | null;
+  manager_id: number | null;
+  manager_name: string | null;
+  referral_id: number | null;
+  referral_name: string | null;
   deal_direction: string;
   client_type: string;
   asset: string | null;
@@ -100,17 +110,54 @@ export type DealRecord = {
   payment_number: string | null;
   payment_date: string | null;
   full_payment_amount: string | number | null;
+  amount_rub: string | number | null;
   supplier_payment_equal: string | number | null;
   agent_fee_amount: string | number | null;
   agent_fee_percent: string | number | null;
   currency: string;
   wallet_address: string | null;
   generated_documents_json: Record<string, { title: string; file_name: string; download_url: string }> | null;
+  documents_status: string | null;
+  client_rate: string | number | null;
+  client_asset_amount: string | number | null;
+  required_action: string | null;
   payment_received_amount: string | number | null;
   payment_received_at: string | null;
   comment: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type LiquidityPurchaseLotRecord = {
+  id: number;
+  asset: string;
+  purchase_amount_rub: string | number;
+  purchase_rate: string | number;
+  purchased_asset_volume: string | number;
+  used_asset_volume: string | number;
+  remaining_asset_volume: string | number;
+  status: string;
+  source: string | null;
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LiquidityAllocationRecord = {
+  id: number;
+  lot_id: number;
+  deal_id: number;
+  asset: string;
+  asset_volume: string | number;
+  allocation_rate: string | number;
+  cost_basis_rub: string | number;
+  comment: string | null;
+  created_at: string;
+};
+
+export type LiquidityAllocationResult = {
+  deal: DealRecord;
+  allocations: LiquidityAllocationRecord[];
 };
 
 export async function apiGet<T>(path: string, token?: string): Promise<T | null> {
@@ -157,5 +204,16 @@ export async function apiPatch<T>(path: string, payload: unknown): Promise<T | n
     return (await response.json()) as T;
   } catch {
     return null;
+  }
+}
+
+export async function apiDelete(path: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      method: "DELETE"
+    });
+    return response.ok;
+  } catch {
+    return false;
   }
 }

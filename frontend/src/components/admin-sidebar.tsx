@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, ClipboardList, FileText, HandCoins, MessageSquare, Users, UserCog, Network } from "lucide-react";
+import { BarChart3, ClipboardList, Coins, FileText, HandCoins, MessageSquare, Users, UserCog, Network } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const nav = [
   { href: "/admin/dashboard", label: "Дашборд", icon: BarChart3 },
   { href: "/admin/deals", label: "Сделки", icon: HandCoins },
+  { href: "/admin/liquidity-purchases", label: "Покупка ликвидности", icon: Coins },
   { href: "/admin/document-requests", label: "Заявки на документы", icon: ClipboardList },
   { href: "/admin/cfa-deals", label: "ЦФА-сделки", icon: HandCoins },
   { href: "/admin/document-templates", label: "Шаблоны документов", icon: FileText },

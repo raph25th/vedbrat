@@ -261,8 +261,69 @@ class CfaDeal(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     client: Mapped[Client] = relationship(back_populates="deals")
+    manager: Mapped[User | None] = relationship("User", foreign_keys=[manager_id])
+    referral: Mapped[Referral | None] = relationship("Referral", foreign_keys=[referral_id])
     documents: Mapped[list["CfaDealDocument"]] = relationship(back_populates="deal")
     history: Mapped[list["CfaDealStatusHistory"]] = relationship(back_populates="deal")
+    liquidity_allocations: Mapped[list["LiquidityLotAllocation"]] = relationship(back_populates="deal")
+
+    @property
+    def client_name(self) -> str | None:
+        if not self.client:
+            return None
+        return self.client.ru_name or self.client.full_name_ru
+
+    @property
+    def client_inn(self) -> str | None:
+        return self.client.inn if self.client else None
+
+    @property
+    def manager_name(self) -> str | None:
+        return self.manager.name if self.manager else None
+
+    @property
+    def referral_name(self) -> str | None:
+        return self.referral.name if self.referral else None
+
+    @property
+    def documents_status(self) -> str:
+        return "generated" if self.generated_documents_json else "not_generated"
+
+
+class LiquidityPurchaseLot(Base, TimestampMixin):
+    __tablename__ = "liquidity_purchase_lots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset: Mapped[str] = mapped_column(String(32), default="USDT", index=True)
+    purchase_amount_rub: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
+    purchase_rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=0)
+    purchased_asset_volume: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=0)
+    used_asset_volume: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=0)
+    remaining_asset_volume: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=0)
+    status: Mapped[str] = mapped_column(String(32), default="open", index=True)
+    source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    allocations: Mapped[list["LiquidityLotAllocation"]] = relationship(back_populates="lot")
+
+
+class LiquidityLotAllocation(Base, TimestampMixin):
+    __tablename__ = "liquidity_lot_allocations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lot_id: Mapped[int] = mapped_column(ForeignKey("liquidity_purchase_lots.id"), index=True)
+    deal_id: Mapped[int] = mapped_column(ForeignKey("cfa_deals.id"), index=True)
+    asset: Mapped[str] = mapped_column(String(32), default="USDT", index=True)
+    asset_volume: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=0)
+    allocation_rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=0)
+    cost_basis_rub: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    lot: Mapped[LiquidityPurchaseLot] = relationship(back_populates="allocations")
+    deal: Mapped[CfaDeal] = relationship(back_populates="liquidity_allocations")
 
 
 class CfaDealDocument(Base, TimestampMixin):
@@ -336,6 +397,7 @@ class DocumentIssueRequest(Base, TimestampMixin):
     admin_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     generated_documents_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     requested_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     requested_by_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
     request_source: Mapped[str] = mapped_column(String(32), default="manager_admin", index=True)
@@ -350,6 +412,28 @@ class DocumentIssueRequest(Base, TimestampMixin):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    client: Mapped[Client | None] = relationship("Client", foreign_keys=[client_id])
+    manager: Mapped[User | None] = relationship("User", foreign_keys=[manager_id])
+
+    @property
+    def client_name(self) -> str | None:
+        if self.client:
+            return self.client.ru_name or self.client.full_name_ru
+        payload = self.payload_json or {}
+        value = payload.get("ru_name") or payload.get("full_name_ru") or payload.get("en_name")
+        return str(value) if value else None
+
+    @property
+    def client_inn(self) -> str | None:
+        if self.client:
+            return self.client.inn
+        payload = self.payload_json or {}
+        value = payload.get("inn")
+        return str(value) if value else None
+
+    @property
+    def manager_name(self) -> str | None:
+        return self.manager.name if self.manager else None
 
 
 class GeneratedDocument(Base, TimestampMixin):

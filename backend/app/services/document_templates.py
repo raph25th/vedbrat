@@ -1,10 +1,15 @@
 import re
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
 
 PLACEHOLDER_RE = re.compile(r"\$\{([a-zA-Z0-9_.]+)\}")
+
+
+class DocumentTemplateError(ValueError):
+    pass
 
 
 class DocumentTemplateService:
@@ -57,3 +62,41 @@ class DocumentTemplateService:
         tmp_target.replace(target)
         # TODO: this preserves XML structure for same-run placeholders; split-run variables need robust OOXML replacement.
         return target
+
+    def unresolved_variables_in_docx(self, file_path: str | Path) -> list[str]:
+        return self.extract_variables_from_docx(file_path)
+
+    def convert_docx_to_pdf(self, docx_path: str | Path, output_dir: str | Path | None = None) -> Path:
+        source = Path(docx_path)
+        if not source.exists():
+            raise DocumentTemplateError(f"DOCX file not found: {source}")
+
+        target_dir = Path(output_dir) if output_dir else source.parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        executable = shutil.which("soffice") or shutil.which("libreoffice")
+        if not executable:
+            raise DocumentTemplateError(
+                "Не найден LibreOffice/soffice для конвертации DOCX в PDF. "
+                "Установите LibreOffice на сервер и убедитесь, что команда soffice или libreoffice доступна в PATH."
+            )
+
+        result = subprocess.run(
+            [
+                executable,
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(target_dir),
+                str(source),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        pdf_path = target_dir / f"{source.stem}.pdf"
+        if result.returncode != 0 or not pdf_path.exists():
+            detail = (result.stderr or result.stdout or "unknown LibreOffice error").strip()
+            raise DocumentTemplateError(f"Не удалось конвертировать DOCX в PDF: {detail}")
+        return pdf_path

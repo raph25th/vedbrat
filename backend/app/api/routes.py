@@ -22,6 +22,8 @@ from app.models import (
     DocumentTemplate,
     DocumentIssueRequest,
     GeneratedDocument,
+    LiquidityLotAllocation,
+    LiquidityPurchaseLot,
     Referral,
     TelegramChat,
     User,
@@ -57,6 +59,13 @@ from app.schemas import (
     DealStatusUpdate,
     DealWalletUpdate,
     LoginRequest,
+    LiquidityAllocationRequest,
+    LiquidityAllocationResult,
+    LiquidityLotAllocateRequest,
+    LiquidityLotAllocationOut,
+    LiquidityPurchaseLotCreate,
+    LiquidityPurchaseLotOut,
+    LiquidityPurchaseLotUpdate,
     ReferralCreate,
     ReferralOut,
     ReferralUpdate,
@@ -73,8 +82,8 @@ from app.schemas import (
     UserUpdate,
 )
 from app.services.document_flow import find_matching_document_templates, resolve_document_flow_type
-from app.services.document_request_generator import DOCUMENT_KEYS, DocumentGenerationError, generate_request_documents
-from app.services.document_templates import DocumentTemplateService
+from app.services.document_request_generator import DOCUMENT_KEYS, DocumentGenerationError, format_date, format_money, generate_request_documents
+from app.services.document_templates import DocumentTemplateError, DocumentTemplateService
 
 router = APIRouter()
 ModelT = TypeVar("ModelT")
@@ -146,6 +155,136 @@ def calculate_profit_fields(deal: CfaDeal) -> None:
     deal.net_profit_rub = deal.gross_profit_rub - referral_fee_rub
 
 
+def calculate_liquidity_volume(amount_rub: Decimal, rate: Decimal) -> Decimal:
+    if rate <= 0:
+        raise HTTPException(status_code=400, detail="Purchase rate must be greater than zero")
+    return (Decimal(amount_rub) / Decimal(rate)).quantize(Decimal("0.000001"))
+
+
+def refresh_liquidity_lot_status(lot: LiquidityPurchaseLot) -> None:
+    if Decimal(lot.remaining_asset_volume or 0) <= 0:
+        lot.remaining_asset_volume = Decimal("0")
+        lot.status = "closed"
+    elif Decimal(lot.used_asset_volume or 0) > 0:
+        lot.status = "partially_used"
+    else:
+        lot.status = "open"
+
+
+def prepare_liquidity_lot_values(values: dict[str, Any]) -> dict[str, Any]:
+    amount = Decimal(values["purchase_amount_rub"])
+    rate = Decimal(values["purchase_rate"])
+    volume = values.get("purchased_asset_volume")
+    if volume is None:
+        volume = calculate_liquidity_volume(amount, rate)
+    values["purchased_asset_volume"] = Decimal(volume)
+    values["used_asset_volume"] = Decimal(values.get("used_asset_volume") or 0)
+    values["remaining_asset_volume"] = Decimal(values.get("remaining_asset_volume") or values["purchased_asset_volume"])
+    values["status"] = values.get("status") or "open"
+    return values
+
+
+def deal_liquidity_volume(deal: CfaDeal, requested_volume: Decimal | None = None) -> Decimal:
+    if requested_volume is not None:
+        return Decimal(requested_volume)
+    if deal.actual_asset_amount:
+        return Decimal(deal.actual_asset_amount)
+    if deal.client_asset_amount:
+        return Decimal(deal.client_asset_amount)
+    amount = Decimal(deal.amount_rub or deal.full_payment_amount or 0)
+    rate = Decimal(deal.actual_close_rate or deal.client_rate or 0)
+    if amount <= 0 or rate <= 0:
+        raise HTTPException(status_code=400, detail="Deal asset volume or rate is required for liquidity allocation")
+    return (amount / rate).quantize(Decimal("0.000001"))
+
+
+def allocated_deal_volume(db: Session, deal_id: int, asset: str) -> Decimal:
+    allocations = db.query(LiquidityLotAllocation).filter(
+        LiquidityLotAllocation.deal_id == deal_id,
+        LiquidityLotAllocation.asset == asset,
+    ).all()
+    return sum((Decimal(item.asset_volume or 0) for item in allocations), Decimal("0"))
+
+
+def allocate_from_lot(
+    db: Session,
+    lot: LiquidityPurchaseLot,
+    deal: CfaDeal,
+    volume: Decimal,
+    comment: str | None = None,
+) -> LiquidityLotAllocation:
+    if lot.asset != (deal.asset or "USDT"):
+        raise HTTPException(status_code=400, detail="Liquidity lot asset does not match deal asset")
+    volume = Decimal(volume).quantize(Decimal("0.000001"))
+    if volume <= 0:
+        raise HTTPException(status_code=400, detail="Allocation volume must be greater than zero")
+    if lot.status == "closed" or Decimal(lot.remaining_asset_volume or 0) < volume:
+        raise HTTPException(status_code=400, detail="Liquidity lot does not have enough remaining volume")
+
+    allocation = LiquidityLotAllocation(
+        lot_id=lot.id,
+        deal_id=deal.id,
+        asset=lot.asset,
+        asset_volume=volume,
+        allocation_rate=lot.purchase_rate,
+        cost_basis_rub=(volume * Decimal(lot.purchase_rate)).quantize(Decimal("0.01")),
+        comment=comment,
+    )
+    db.add(allocation)
+    lot.used_asset_volume = Decimal(lot.used_asset_volume or 0) + volume
+    lot.remaining_asset_volume = Decimal(lot.remaining_asset_volume or 0) - volume
+    refresh_liquidity_lot_status(lot)
+    return allocation
+
+
+def finalize_deal_liquidity_close(db: Session, deal: CfaDeal, target_volume: Decimal, current_user_id: int | None = None, comment: str | None = None) -> None:
+    allocations = db.query(LiquidityLotAllocation).filter(LiquidityLotAllocation.deal_id == deal.id).all()
+    total_volume = sum((Decimal(item.asset_volume or 0) for item in allocations), Decimal("0"))
+    if total_volume < target_volume:
+        return
+    total_cost = sum((Decimal(item.cost_basis_rub or 0) for item in allocations), Decimal("0"))
+    deal.actual_asset_amount = total_volume.quantize(Decimal("0.000001"))
+    if total_volume > 0:
+        deal.actual_close_rate = (total_cost / total_volume).quantize(Decimal("0.000001"))
+    old_status = deal.status
+    deal.status = "closed"
+    deal.completed_at = deal.completed_at or datetime.now(timezone.utc)
+    deal.required_action = None
+    if old_status != deal.status:
+        db.add(CfaDealStatusHistory(deal_id=deal.id, old_status=old_status, new_status=deal.status, changed_by=current_user_id, comment=comment))
+
+
+def auto_allocate_deal_liquidity(
+    db: Session,
+    deal: CfaDeal,
+    target_volume: Decimal,
+    comment: str | None = None,
+) -> list[LiquidityLotAllocation]:
+    asset = deal.asset or "USDT"
+    already_allocated = allocated_deal_volume(db, deal.id, asset)
+    remaining_need = (Decimal(target_volume) - already_allocated).quantize(Decimal("0.000001"))
+    if remaining_need <= 0:
+        return db.query(LiquidityLotAllocation).filter(LiquidityLotAllocation.deal_id == deal.id).order_by(LiquidityLotAllocation.id.desc()).all()
+
+    available_lots = db.query(LiquidityPurchaseLot).filter(
+        LiquidityPurchaseLot.asset == asset,
+        LiquidityPurchaseLot.status != "closed",
+        LiquidityPurchaseLot.remaining_asset_volume > 0,
+    ).order_by(LiquidityPurchaseLot.remaining_asset_volume.asc(), LiquidityPurchaseLot.id.asc()).all()
+    available_volume = sum((Decimal(lot.remaining_asset_volume or 0) for lot in available_lots), Decimal("0"))
+    if available_volume < remaining_need:
+        raise HTTPException(status_code=400, detail="Not enough available liquidity for this deal")
+
+    created: list[LiquidityLotAllocation] = []
+    for lot in available_lots:
+        if remaining_need <= 0:
+            break
+        volume = min(Decimal(lot.remaining_asset_volume or 0), remaining_need)
+        created.append(allocate_from_lot(db, lot, deal, volume, comment))
+        remaining_need = (remaining_need - volume).quantize(Decimal("0.000001"))
+    return created
+
+
 def prepare_document_request_values(values: dict[str, Any]) -> dict[str, Any]:
     values["status"] = values.get("status") or "submitted"
     values["request_source"] = values.get("request_source") or "mini_app"
@@ -206,6 +345,67 @@ def extract_client_values_from_request(values: dict[str, Any]) -> dict[str, Any]
     )
 
 
+def upsert_client_from_document_request_values(
+    db: Session,
+    values: dict[str, Any],
+    *,
+    overwrite_existing: bool = False,
+) -> Client:
+    client_values = extract_client_values_from_request(values)
+    client = None
+    if values.get("client_id"):
+        client = db.get(Client, values["client_id"])
+    if client is None and client_values.get("inn"):
+        client = db.query(Client).filter(Client.inn == client_values["inn"]).first()
+    if client is None and client_values.get("phone"):
+        client = db.query(Client).filter(Client.phone == client_values["phone"]).first()
+    if client is None:
+        client = Client(**client_values)
+        db.add(client)
+        db.flush()
+    else:
+        for key, value in client_values.items():
+            if value and (overwrite_existing or not getattr(client, key, None)):
+                setattr(client, key, value)
+    values["client_id"] = client.id
+    return client
+
+
+def document_request_values(obj: DocumentIssueRequest) -> dict[str, Any]:
+    return {
+        "client_id": obj.client_id,
+        "client_type": obj.client_type,
+        "payload_json": obj.payload_json,
+    }
+
+
+def apply_document_request_update(
+    db: Session,
+    obj: DocumentIssueRequest,
+    payload: DocumentIssueRequestUpdate,
+) -> DocumentIssueRequest:
+    values = payload.model_dump(exclude_unset=True)
+    if isinstance(values.get("payload_json"), dict):
+        values["payload_json"] = {**(obj.payload_json or {}), **values["payload_json"]}
+    for key, value in values.items():
+        setattr(obj, key, value)
+
+    if "payload_json" in values or not obj.client_id or "client_id" in values:
+        current_values = document_request_values(obj)
+        upsert_client_from_document_request_values(db, current_values, overwrite_existing=True)
+        obj.client_id = current_values["client_id"]
+    return obj
+
+
+def document_request_deal_status(request: DocumentIssueRequest) -> str:
+    return request.status or "documents_generated"
+
+
+def document_request_amount(request: DocumentIssueRequest) -> Decimal:
+    amount = request.full_payment_amount or request.total_amount or request.payment_amount or request.supplier_payment_equal
+    return Decimal(amount or 0)
+
+
 def sync_deal_from_document_request(
     db: Session,
     request: DocumentIssueRequest,
@@ -222,15 +422,17 @@ def sync_deal_from_document_request(
             deal_number=f"DOCREQ-{request.id}",
             client_id=client.id,
             document_request_id=request.id,
+            created_at=request.created_at,
         )
         db.add(deal)
 
     deal.client_id = client.id
     deal.document_request_id = request.id
+    deal.manager_id = request.manager_id
     deal.deal_direction = request.deal_type or "crypto"
     deal.client_type = request.client_type or "individual"
     deal.asset = request.crypto_asset or "USDT"
-    deal.status = "documents_generated"
+    deal.status = document_request_deal_status(request)
     deal.source_type = "document_request"
     deal.document_flow_type = request.document_package_type or "offer_crypto_individual"
     deal.contract_number = request.contract_number
@@ -238,7 +440,7 @@ def sync_deal_from_document_request(
     deal.payment_number = request.payment_number
     deal.payment_date = request.payment_date
     deal.full_payment_amount = request.full_payment_amount
-    deal.amount_rub = request.full_payment_amount or 0
+    deal.amount_rub = document_request_amount(request)
     deal.supplier_payment_equal = request.supplier_payment_equal
     deal.agent_fee_amount = request.agent_fee_amount
     deal.agent_fee_percent = request.agent_fee_percent
@@ -249,6 +451,48 @@ def sync_deal_from_document_request(
     db.flush()
     request.deal_id = deal.id
     return deal
+
+
+def build_deal_document_context(deal: CfaDeal, client: Client) -> dict[str, str]:
+    return {
+        "contract.number": str(deal.contract_number or ""),
+        "contract.date": format_date(deal.contract_date),
+        "payment.number": str(deal.payment_number or ""),
+        "payment.date": format_date(deal.payment_date),
+        "customer.ru.name": str(client.ru_name or client.full_name_ru or ""),
+        "customer.inn": str(client.inn or ""),
+        "customer.email": str(client.email or ""),
+        "customer_account.payment_account": str(client.bank_account or ""),
+        "customer_account.correspondent_account": str(client.bank_corr_account or ""),
+        "customer_account.bic": str(client.bank_bik or ""),
+        "customer_account.ru.name": str(client.bank_name or ""),
+        "executor.ru.name": "",
+        "paymentCustom.full_payment_amount": format_money(deal.full_payment_amount or deal.amount_rub, keep_cents=False),
+        "paymentCustom.supplier_payment_equal": format_money(deal.supplier_payment_equal),
+        "paymentCustom.agent_fee_amount": format_money(deal.agent_fee_amount),
+        "paymentCustom.e_wallet": str(deal.wallet_address or ""),
+    }
+
+
+def render_template_to_pdf(template: DocumentTemplate, context: dict[str, str], target_dir: Path, filename_stem: str) -> tuple[Path, Path]:
+    if not template.file_path:
+        raise DocumentGenerationError("У шаблона не загружен DOCX-файл")
+    variables = template_service.extract_variables_from_docx(template.file_path)
+    missing = [variable for variable in variables if variable not in context or context[variable] in ("", None)]
+    if missing:
+        raise DocumentGenerationError("Не заполнены переменные шаблона: " + ", ".join(missing))
+    docx_path = template_service.render_docx(template.file_path, context, target_dir)
+    final_docx_path = target_dir / f"{filename_stem}.docx"
+    if docx_path != final_docx_path:
+        docx_path.replace(final_docx_path)
+    unresolved = template_service.unresolved_variables_in_docx(final_docx_path)
+    if unresolved:
+        raise DocumentGenerationError("Не заполнены переменные шаблона: " + ", ".join(unresolved))
+    try:
+        pdf_path = template_service.convert_docx_to_pdf(final_docx_path, target_dir)
+    except DocumentTemplateError as exc:
+        raise DocumentGenerationError(str(exc)) from exc
+    return final_docx_path, pdf_path
 
 
 @router.post("/auth/login", response_model=Token)
@@ -948,7 +1192,7 @@ def get_active_deal(deal_id: int, db: Session = Depends(get_db)) -> CfaDeal:
 @router.patch("/deals/{deal_id}", response_model=CfaDealOut)
 def update_active_deal(deal_id: int, payload: CfaDealUpdate, db: Session = Depends(get_db)) -> CfaDeal:
     deal = get_or_404(db, CfaDeal, deal_id)
-    allowed = {"status", "payment_received_amount", "payment_received_at", "comment"}
+    allowed = {"status", "payment_received_amount", "payment_received_at", "comment", "manager_id"}
     values = {key: value for key, value in payload.model_dump(exclude_unset=True).items() if key in allowed}
     for key, value in values.items():
         setattr(deal, key, value)
@@ -961,6 +1205,111 @@ def update_active_deal(deal_id: int, payload: CfaDealUpdate, db: Session = Depen
     return deal
 
 
+@router.get("/liquidity-purchases", response_model=list[LiquidityPurchaseLotOut])
+def list_liquidity_purchase_lots(db: Session = Depends(get_db)) -> list[LiquidityPurchaseLot]:
+    return db.query(LiquidityPurchaseLot).order_by(LiquidityPurchaseLot.id.desc()).all()
+
+
+@router.post("/liquidity-purchases", response_model=LiquidityPurchaseLotOut)
+def create_liquidity_purchase_lot(payload: LiquidityPurchaseLotCreate, db: Session = Depends(get_db)) -> LiquidityPurchaseLot:
+    values = prepare_liquidity_lot_values(payload.model_dump())
+    lot = LiquidityPurchaseLot(**values)
+    refresh_liquidity_lot_status(lot)
+    db.add(lot)
+    db.commit()
+    db.refresh(lot)
+    return lot
+
+
+@router.get("/liquidity-purchases/{lot_id}", response_model=LiquidityPurchaseLotOut)
+def get_liquidity_purchase_lot(lot_id: int, db: Session = Depends(get_db)) -> LiquidityPurchaseLot:
+    return get_or_404(db, LiquidityPurchaseLot, lot_id)
+
+
+@router.patch("/liquidity-purchases/{lot_id}", response_model=LiquidityPurchaseLotOut)
+def update_liquidity_purchase_lot(lot_id: int, payload: LiquidityPurchaseLotUpdate, db: Session = Depends(get_db)) -> LiquidityPurchaseLot:
+    lot = get_or_404(db, LiquidityPurchaseLot, lot_id)
+    if lot.status == "closed":
+        raise HTTPException(status_code=400, detail="Closed liquidity lots cannot be edited")
+    values = payload.model_dump(exclude_unset=True)
+    has_allocations = db.query(LiquidityLotAllocation.id).filter(LiquidityLotAllocation.lot_id == lot.id).first() is not None
+    if has_allocations and "asset" in values and values["asset"] != lot.asset:
+        raise HTTPException(status_code=400, detail="Cannot change asset after lot usage")
+    for key, value in values.items():
+        setattr(lot, key, value)
+    if "purchase_amount_rub" in values or "purchase_rate" in values or "purchased_asset_volume" in values:
+        if "purchased_asset_volume" not in values:
+            lot.purchased_asset_volume = calculate_liquidity_volume(Decimal(lot.purchase_amount_rub), Decimal(lot.purchase_rate))
+        lot.remaining_asset_volume = Decimal(lot.purchased_asset_volume) - Decimal(lot.used_asset_volume or 0)
+        if lot.remaining_asset_volume < 0:
+            raise HTTPException(status_code=400, detail="Purchased volume cannot be less than already used volume")
+    refresh_liquidity_lot_status(lot)
+    db.commit()
+    db.refresh(lot)
+    return lot
+
+
+@router.delete("/liquidity-purchases/{lot_id}", status_code=204)
+def delete_liquidity_purchase_lot(lot_id: int, db: Session = Depends(get_db)) -> None:
+    lot = get_or_404(db, LiquidityPurchaseLot, lot_id)
+    used = db.query(LiquidityLotAllocation.id).filter(LiquidityLotAllocation.lot_id == lot.id).first()
+    if used:
+        raise HTTPException(status_code=409, detail="Cannot delete a liquidity lot that has allocations")
+    db.delete(lot)
+    db.commit()
+
+
+@router.get("/liquidity-purchases/{lot_id}/allocations", response_model=list[LiquidityLotAllocationOut])
+def list_liquidity_purchase_lot_allocations(lot_id: int, db: Session = Depends(get_db)) -> list[LiquidityLotAllocation]:
+    get_or_404(db, LiquidityPurchaseLot, lot_id)
+    return db.query(LiquidityLotAllocation).filter(LiquidityLotAllocation.lot_id == lot_id).order_by(LiquidityLotAllocation.id.desc()).all()
+
+
+@router.post("/liquidity-purchases/{lot_id}/allocate", response_model=LiquidityAllocationResult)
+def allocate_liquidity_lot_to_deal(
+    lot_id: int,
+    payload: LiquidityLotAllocateRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    lot = get_or_404(db, LiquidityPurchaseLot, lot_id)
+    deal = get_or_404(db, CfaDeal, payload.deal_id)
+    target_volume = deal_liquidity_volume(deal)
+    already_allocated = allocated_deal_volume(db, deal.id, deal.asset or "USDT")
+    if already_allocated + payload.asset_volume > target_volume:
+        raise HTTPException(status_code=400, detail="Allocation would exceed deal asset volume")
+    allocation = allocate_from_lot(db, lot, deal, payload.asset_volume, payload.comment)
+    db.flush()
+    finalize_deal_liquidity_close(db, deal, target_volume, comment=payload.comment)
+    db.commit()
+    db.refresh(deal)
+    db.refresh(allocation)
+    return {"deal": deal, "allocations": [allocation]}
+
+
+@router.get("/deals/{deal_id}/liquidity-allocations", response_model=list[LiquidityLotAllocationOut])
+def list_deal_liquidity_allocations(deal_id: int, db: Session = Depends(get_db)) -> list[LiquidityLotAllocation]:
+    get_or_404(db, CfaDeal, deal_id)
+    return db.query(LiquidityLotAllocation).filter(LiquidityLotAllocation.deal_id == deal_id).order_by(LiquidityLotAllocation.id.desc()).all()
+
+
+@router.post("/deals/{deal_id}/close-with-liquidity", response_model=LiquidityAllocationResult)
+def close_deal_with_liquidity(
+    deal_id: int,
+    payload: LiquidityAllocationRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    deal = get_or_404(db, CfaDeal, deal_id)
+    target_volume = deal_liquidity_volume(deal, payload.asset_volume)
+    allocations = auto_allocate_deal_liquidity(db, deal, target_volume, payload.comment)
+    db.flush()
+    finalize_deal_liquidity_close(db, deal, target_volume, comment=payload.comment)
+    db.commit()
+    db.refresh(deal)
+    for allocation in allocations:
+        db.refresh(allocation)
+    return {"deal": deal, "allocations": allocations}
+
+
 @router.get("/document-requests", response_model=list[DocumentIssueRequestOut])
 def list_document_requests(db: Session = Depends(get_db)) -> list[DocumentIssueRequest]:
     return db.query(DocumentIssueRequest).order_by(DocumentIssueRequest.id.desc()).all()
@@ -970,21 +1319,7 @@ def list_document_requests(db: Session = Depends(get_db)) -> list[DocumentIssueR
 def create_document_request(payload: DocumentIssueRequestCreate, db: Session = Depends(get_db)) -> DocumentIssueRequest:
     values = prepare_document_request_values(payload.model_dump())
     if not values.get("client_id"):
-        client_values = extract_client_values_from_request(values)
-        client = None
-        if client_values.get("inn"):
-            client = db.query(Client).filter(Client.inn == client_values["inn"]).first()
-        if client is None and client_values.get("phone"):
-            client = db.query(Client).filter(Client.phone == client_values["phone"]).first()
-        if client is None:
-            client = Client(**client_values)
-            db.add(client)
-            db.flush()
-        else:
-            for key, value in client_values.items():
-                if value and not getattr(client, key, None):
-                    setattr(client, key, value)
-        values["client_id"] = client.id
+        upsert_client_from_document_request_values(db, values)
     obj = DocumentIssueRequest(**values)
     db.add(obj)
     db.commit()
@@ -1003,14 +1338,36 @@ def update_document_request(
     payload: DocumentIssueRequestUpdate,
     db: Session = Depends(get_db),
 ) -> DocumentIssueRequest:
-    obj = apply_update(get_or_404(db, DocumentIssueRequest, request_id), payload)
+    obj = apply_document_request_update(db, get_or_404(db, DocumentIssueRequest, request_id), payload)
+    deal = None
+    if obj.deal_id:
+        deal = db.get(CfaDeal, obj.deal_id)
+    if deal is None:
+        deal = db.query(CfaDeal).filter(CfaDeal.document_request_id == obj.id).first()
+    if deal and obj.client_id:
+        client = get_or_404(db, Client, obj.client_id)
+        sync_deal_from_document_request(db, obj, client, obj.generated_documents_json or deal.generated_documents_json or {})
     db.commit()
     db.refresh(obj)
     return obj
 
 
+@router.delete("/document-requests/{request_id}", status_code=204)
+def delete_document_request(request_id: int, db: Session = Depends(get_db)) -> None:
+    obj = get_or_404(db, DocumentIssueRequest, request_id)
+    linked_deal = obj.deal_id or db.query(CfaDeal.id).filter(CfaDeal.document_request_id == obj.id).first()
+    if linked_deal:
+        raise HTTPException(status_code=409, detail="Cannot delete a request that has already been converted to a deal")
+    db.delete(obj)
+    db.commit()
+
+
 @router.post("/document-requests/{request_id}/generate-documents")
-def generate_document_request_documents(request_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+def generate_document_request_documents(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*DOCUMENT_ISSUER_ROLES)),
+) -> dict[str, Any]:
     obj = get_or_404(db, DocumentIssueRequest, request_id)
     if not obj.client_id:
         raise HTTPException(status_code=400, detail="К заявке не привязан клиент")
@@ -1021,6 +1378,20 @@ def generate_document_request_documents(request_id: int, db: Session = Depends(g
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     obj.generated_documents_json = documents
     deal = sync_deal_from_document_request(db, obj, client, documents)
+    db.query(GeneratedDocument).filter(GeneratedDocument.issue_request_id == obj.id).delete(synchronize_session=False)
+    for document_key, document in documents.items():
+        db.add(
+            GeneratedDocument(
+                deal_id=deal.id,
+                issue_request_id=obj.id,
+                document_type=document_key,
+                file_name=document["file_name"],
+                file_path=document["file_path"],
+                status="issued_pdf",
+                generated_by_user_id=current_user.id,
+                issued_by_user_id=current_user.id,
+            )
+        )
     db.commit()
     db.refresh(obj)
     db.refresh(deal)
@@ -1043,7 +1414,7 @@ def download_document_request_document(
     file_path = Path(document["file_path"])
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Generated file not found")
-    return FileResponse(file_path, filename=document["file_name"])
+    return FileResponse(file_path, filename=document["file_name"], media_type=document.get("mime_type") or "application/pdf")
 
 
 @router.get("/document-issue-requests", response_model=list[DocumentIssueRequestOut], dependencies=[Depends(require_roles("manager", "admin", "director", "document_admin", "admin_assistant"))])
@@ -1132,26 +1503,58 @@ def approve_issue_request(request_id: int, db: Session = Depends(get_db), curren
 def generate_issue_request_documents(request_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> DocumentIssueRequest:
     obj = get_or_404(db, DocumentIssueRequest, request_id)
     deal = get_or_404(db, CfaDeal, obj.deal_id)
+    client = get_or_404(db, Client, deal.client_id)
     matches = find_matching_document_templates(db, deal, obj.request_type, DocumentTemplate)
     if matches and not obj.selected_template_id:
         obj.selected_template_id = matches[0].id
+    template = get_or_404(db, DocumentTemplate, obj.selected_template_id) if obj.selected_template_id else (matches[0] if matches else None)
+    if template is None:
+        raise HTTPException(status_code=400, detail="Не найден активный DOCX-шаблон для генерации документа")
+    target_dir = Path(settings.storage_dir) / "generated_documents" / f"issue_request_{obj.id}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename_stem = f"{deal.deal_number}-{obj.request_type}"
+    try:
+        source_docx_path, pdf_path = render_template_to_pdf(template, build_deal_document_context(deal, client), target_dir, filename_stem)
+    except DocumentGenerationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     generated = GeneratedDocument(
         deal_id=deal.id,
         template_id=obj.selected_template_id,
         issue_request_id=obj.id,
         document_type=obj.request_type,
-        file_name=f"{deal.deal_number}-{obj.request_type}.docx",
-        file_path=str(Path(settings.storage_dir) / "generated_documents" / f"{deal.deal_number}-{obj.request_type}.docx"),
-        status="generated",
+        file_name=pdf_path.name,
+        file_path=str(pdf_path),
+        status="issued_pdf",
         generated_by_user_id=current_user.id,
+        issued_by_user_id=current_user.id,
     )
     db.add(generated)
     db.flush()
     obj.generated_document_id = generated.id
-    obj.status = "generated"
+    obj.generated_documents_json = {
+        obj.request_type: {
+            "title": template.name,
+            "file_name": pdf_path.name,
+            "file_path": str(pdf_path),
+            "mime_type": "application/pdf",
+            "source_docx_file_path": str(source_docx_path),
+            "download_url": f"/generated-documents/{generated.id}/download",
+        }
+    }
+    obj.status = "issued_to_client"
+    obj.issued_by_user_id = current_user.id
     db.commit()
     db.refresh(obj)
     return obj
+
+
+@router.get("/generated-documents/{document_id}/download", dependencies=[Depends(require_roles(*DOCUMENT_ISSUER_ROLES))])
+def download_generated_document(document_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    document = get_or_404(db, GeneratedDocument, document_id)
+    file_path = Path(document.file_path or "")
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Generated PDF not found")
+    return FileResponse(file_path, filename=document.file_name or file_path.name, media_type="application/pdf")
 
 
 @router.post("/document-issue-requests/{request_id}/issue-to-client", response_model=DocumentIssueRequestOut, dependencies=[Depends(require_roles(*DOCUMENT_ISSUER_ROLES))])

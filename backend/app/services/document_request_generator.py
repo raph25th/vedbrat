@@ -12,22 +12,26 @@ from xml.etree import ElementTree as ET
 
 from app.core.config import settings
 from app.models import Client, DocumentIssueRequest
+from app.services.document_templates import DocumentTemplateError, DocumentTemplateService
 
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "documents"
 OFFER_TEMPLATE = TEMPLATE_DIR / "crypto_individual_offer_statement.docx"
 PAYMENT_TEMPLATE = TEMPLATE_DIR / "crypto_individual_payment_order_act.docx"
 GENERATED_ROOT = Path(settings.storage_dir) / "generated_documents"
+template_service = DocumentTemplateService()
 
 DOCUMENT_KEYS = {
     "offer_statement": {
         "title": "Заявление о присоединении к оферте",
         "template": OFFER_TEMPLATE,
         "filename": "offer_statement_{request_id}.docx",
+        "pdf_filename": "offer_statement_{request_id}.pdf",
     },
     "payment_order_act": {
         "title": "Счет-поручение и акт-отчет агента",
         "template": PAYMENT_TEMPLATE,
         "filename": "payment_order_act_{request_id}.docx",
+        "pdf_filename": "payment_order_act_{request_id}.pdf",
     },
 }
 
@@ -185,12 +189,25 @@ def generate_request_documents(request: DocumentIssueRequest, client: Client) ->
     documents: dict[str, dict[str, str]] = {}
     for key, meta in DOCUMENT_KEYS.items():
         filename = meta["filename"].format(request_id=request.id)
-        output_path = target_dir / filename
-        render_docx(meta["template"], output_path, context)
+        docx_path = target_dir / filename
+        render_docx(meta["template"], docx_path, context)
+        unresolved = template_service.unresolved_variables_in_docx(docx_path)
+        if unresolved:
+            raise DocumentGenerationError("Не заполнены переменные шаблона: " + ", ".join(unresolved))
+        try:
+            converted_pdf_path = template_service.convert_docx_to_pdf(docx_path, target_dir)
+        except DocumentTemplateError as exc:
+            raise DocumentGenerationError(str(exc)) from exc
+        pdf_path = target_dir / meta["pdf_filename"].format(request_id=request.id)
+        if converted_pdf_path != pdf_path:
+            converted_pdf_path.replace(pdf_path)
         documents[key] = {
             "title": meta["title"],
-            "file_name": filename,
-            "file_path": str(output_path),
+            "file_name": pdf_path.name,
+            "file_path": str(pdf_path),
+            "mime_type": "application/pdf",
+            "source_docx_file_name": filename,
+            "source_docx_file_path": str(docx_path),
             "download_url": f"/document-requests/{request.id}/documents/{key}/download",
         }
     return documents

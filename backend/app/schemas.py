@@ -534,6 +534,11 @@ class CfaDealUpdate(BaseModel):
 
 class CfaDealOut(CfaDealBase, OrmModel):
     id: int
+    client_name: str | None = None
+    client_inn: str | None = None
+    manager_name: str | None = None
+    referral_name: str | None = None
+    documents_status: str | None = None
     wallet_added_at: datetime | None = None
     client_payment_received_at: datetime | None = None
     created_at: datetime
@@ -567,6 +572,72 @@ class DealWalletUpdate(BaseModel):
 
 class DealActualCloseRateUpdate(BaseModel):
     actual_close_rate: Decimal
+
+
+class LiquidityPurchaseLotBase(BaseModel):
+    asset: str = "USDT"
+    purchase_amount_rub: Decimal
+    purchase_rate: Decimal
+    purchased_asset_volume: Decimal | None = None
+    used_asset_volume: Decimal = 0
+    remaining_asset_volume: Decimal | None = None
+    status: str = "open"
+    source: str | None = None
+    comment: str | None = None
+
+
+class LiquidityPurchaseLotCreate(BaseModel):
+    asset: str = "USDT"
+    purchase_amount_rub: Decimal
+    purchase_rate: Decimal
+    purchased_asset_volume: Decimal | None = None
+    source: str | None = None
+    comment: str | None = None
+
+
+class LiquidityPurchaseLotUpdate(BaseModel):
+    asset: str | None = None
+    purchase_amount_rub: Decimal | None = None
+    purchase_rate: Decimal | None = None
+    purchased_asset_volume: Decimal | None = None
+    source: str | None = None
+    comment: str | None = None
+
+
+class LiquidityPurchaseLotOut(LiquidityPurchaseLotBase, OrmModel):
+    id: int
+    purchased_asset_volume: Decimal
+    remaining_asset_volume: Decimal
+    created_at: datetime
+    updated_at: datetime
+
+
+class LiquidityLotAllocationOut(OrmModel):
+    id: int
+    lot_id: int
+    deal_id: int
+    asset: str
+    asset_volume: Decimal
+    allocation_rate: Decimal
+    cost_basis_rub: Decimal
+    comment: str | None = None
+    created_at: datetime
+
+
+class LiquidityAllocationRequest(BaseModel):
+    asset_volume: Decimal | None = None
+    comment: str | None = None
+
+
+class LiquidityLotAllocateRequest(BaseModel):
+    deal_id: int
+    asset_volume: Decimal
+    comment: str | None = None
+
+
+class LiquidityAllocationResult(BaseModel):
+    deal: CfaDealOut
+    allocations: list[LiquidityLotAllocationOut]
 
 
 class CfaDealDocumentBase(BaseModel):
@@ -638,6 +709,7 @@ class DocumentIssueRequestBase(BaseModel):
     admin_comment: str | None = None
     payload_json: dict | None = None
     generated_documents_json: dict | None = None
+    manager_id: int | None = None
     requested_by_user_id: int | None = None
     requested_by_role: str | None = None
     request_source: str = "manager_admin"
@@ -649,6 +721,9 @@ class DocumentIssueRequestBase(BaseModel):
     issued_by_user_id: int | None = None
     selected_template_id: int | None = None
     generated_document_id: int | None = None
+    client_name: str | None = None
+    client_inn: str | None = None
+    manager_name: str | None = None
 
 
 class DocumentIssueRequestCreate(BaseModel):
@@ -691,6 +766,7 @@ class DocumentIssueRequestCreate(BaseModel):
     admin_comment: str | None = None
     payload_json: dict | None = None
     generated_documents_json: dict | None = None
+    manager_id: int | None = None
     request_source: str = "manager_admin"
     request_type: str = "contract"
     status: str = "submitted"
@@ -737,6 +813,7 @@ class DocumentIssueRequestUpdate(BaseModel):
     admin_comment: str | None = None
     payload_json: dict | None = None
     generated_documents_json: dict | None = None
+    manager_id: int | None = None
     status: str | None = None
     comment: str | None = None
     correction_comment: str | None = None
